@@ -17,6 +17,7 @@ module.exports = {
     MODE: getConfig("MODE") || process.env.MODE || "public",        // Bot mode: public/private/group/inbox
     REPO: process.env.REPO || "https://github.com/Tasmee321/Tasmee-Ai-Bot",  // Bot's GitHub repo
     BAILEYS: process.env.BAILEYS || "@whiskeysockets/baileys",  // Bot's BAILEYS
+    GEMINI_API_KEY: process.env.GEMINI_API_KEY || "AQ.Ab8RN6Ji6qDavx5Kov-3NIxQ7niIVTxfLH8_T29oZGaOTIDnZQ",  // Gemini AI key for .ai command
 
     // ===== OWNER & DEVELOPER SETTINGS =====
     OWNER_NUMBER: process.env.OWNER_NUMBER || "923423899407",  // Owner's WhatsApp number
@@ -67,4 +68,3 @@ module.exports = {
     GOODBYE: process.env.GOODBYE || "false", // true to get goodbye in groups 
     ADMIN_ACTION: process.env.ADMIN_ACTION || "false", // true if want see admin activity 
 };
-        
