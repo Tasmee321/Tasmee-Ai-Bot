@@ -140,6 +140,15 @@ async function startBot() {
         }
 
         if (msg.key.fromMe) return;
+
+        // Auto-react to messages if enabled
+        if (config.AUTOREACT === "true" || config.AUTOREACT === true) {
+            const emojiList = (config.CUSTOM_REACT_EMOJIS || "❤️,😂,👍,🔥,😍,😮").split(",");
+            const randomEmoji = emojiList[Math.floor(Math.random() * emojiList.length)].trim();
+            await sock.sendMessage(from, {
+                react: { text: randomEmoji, key: msg.key },
+            }).catch(() => {});
+        }
         const isGroup = from.endsWith("@g.us");
         const text =
             msg.message.conversation ||
