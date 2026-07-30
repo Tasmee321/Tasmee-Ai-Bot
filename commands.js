@@ -5,7 +5,6 @@
 
 const { downloadMediaMessage } = require("@whiskeysockets/baileys");
 const sharp = require("sharp");
-const ytdl = require("@distube/ytdl-core");
 const fs = require("fs");
 const path = require("path");
 
@@ -30,7 +29,8 @@ function saveJSON(filePath, data) {
 
 function isOwner(msg, config) {
     const sender = msg.key.participant || msg.key.remoteJid;
-    return sender.startsWith(config.OWNER_NUMBER);
+    const ownerNumbers = [config.OWNER_NUMBER, config.DEV].filter(Boolean);
+    return ownerNumbers.some((num) => sender.startsWith(num));
 }
 
 module.exports = [
@@ -738,7 +738,7 @@ module.exports = [
         name: "ai",
         aliases: ["gemini", "gpt", "ask"],
         description: "Ask the AI a question. Usage: .ai <your question>",
-        async execute(sock, { from, args, config }) {
+        async execute(sock, { from, args, config, msg }) {
             const question = args.join(" ");
 
             if (!question) {
@@ -751,9 +751,15 @@ module.exports = [
             const apiKey = config.GEMINI_API_KEY || process.env.GEMINI_API_KEY;
 
             if (!apiKey) {
-                await sock.sendMessage(from, {
-                    text: "⚠️ Gemini API key not set. Get a free key from https://aistudio.google.com/app/apikey and add it to config.js as GEMINI_API_KEY.",
-                });
+                if (isOwner(msg, config)) {
+                    await sock.sendMessage(from, {
+                        text: "⚠️ Gemini API key not set. Get a free key from https://aistudio.google.com/app/apikey and add it to config.js as GEMINI_API_KEY.",
+                    });
+                } else {
+                    await sock.sendMessage(from, {
+                        text: "🤖 Sorry, AI feature is currently unavailable. Please try again later.",
+                    });
+                }
                 return;
             }
 
@@ -778,22 +784,28 @@ module.exports = [
                     "Sorry, I couldn't generate a response. Please try again.";
                 await sock.sendMessage(from, { text: `🤖 ${answer}` });
             } catch (err) {
-                await sock.sendMessage(from, { text: `❌ AI error: ${err.message}` });
+                if (isOwner(msg, config)) {
+                    await sock.sendMessage(from, { text: `❌ AI error: ${err.message}` });
+                } else {
+                    await sock.sendMessage(from, { text: "🤖 Sorry, something went wrong. Please try again later." });
+                }
             }
         },
     },
 
+
     // ---------------------------------------
-    // .yt / .youtube - media downloader (link OR song/video name)
+    // .yt / .youtube - media downloader (link OR song/video name) via yt-dlp
     // ---------------------------------------
     {
         name: "yt",
         aliases: ["youtube", "ytmp3", "ytmp4"],
         description: "Download YouTube audio/video. Usage: .yt <link OR song name> [audio|video]",
         async execute(sock, { from, args, text, msg }) {
-            const wantsVideo = /\bvideo\b/i.test(text) || text.includes("ytmp4");
+            const { spawn } = require("child_process");
+            const os = require("os");
 
-            // Remove the "audio"/"video" keyword from args so it isn't treated as part of a search query
+            const wantsVideo = /\bvideo\b/i.test(text) || text.includes("ytmp4");
             const cleanArgs = args.filter((a) => !/^(audio|video)$/i.test(a));
             const directUrl = cleanArgs.find((a) => a.includes("youtube.com") || a.includes("youtu.be"));
 
@@ -804,56 +816,54 @@ module.exports = [
                 return;
             }
 
-            let url = directUrl;
+            // If no link was given, let yt-dlp's own search do the work (ytsearch1:<query>)
+            const target = directUrl || `ytsearch1:${cleanArgs.join(" ")}`;
+            const jobId = `yt_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+            const tmpDir = os.tmpdir();
+            const outTemplate = path.join(tmpDir, `${jobId}.%(ext)s`);
+            const format = wantsVideo ? "best[ext=mp4]/best" : "bestaudio";
+
+            await sock.sendMessage(from, { text: directUrl ? "⏳ Downloading, please wait..." : `🔎 Searching & downloading: *${cleanArgs.join(" ")}*...` });
+
+            const ytdlpArgs = ["-f", format, "-o", outTemplate, "--no-playlist", target];
+
+            const runYtDlp = () =>
+                new Promise((resolve, reject) => {
+                    const proc = spawn("yt-dlp", ytdlpArgs);
+                    let stderr = "";
+                    proc.stderr.on("data", (d) => (stderr += d.toString()));
+                    proc.on("error", (err) => reject(new Error(`yt-dlp not found or failed to start: ${err.message}`)));
+                    proc.on("close", (code) => {
+                        if (code === 0) resolve();
+                        else reject(new Error(stderr.slice(-500) || `yt-dlp exited with code ${code}`));
+                    });
+                });
 
             try {
-                // No direct link given -> search YouTube by name and use the top result
-                if (!url) {
-                    const query = cleanArgs.join(" ");
-                    await sock.sendMessage(from, { text: `🔎 Searching: *${query}*...` });
+                await runYtDlp();
 
-                    const yts = require("yt-search");
-                    const searchResult = await yts(query);
-                    const video = searchResult?.videos?.[0];
+                const matchFile = fs.readdirSync(tmpDir).find((f) => f.startsWith(jobId));
+                if (!matchFile) throw new Error("Download finished but output file was not found.");
 
-                    if (!video) {
-                        await sock.sendMessage(from, { text: "❌ No results found for that search." });
-                        return;
-                    }
-                    url = video.url;
-                }
-
-                if (!ytdl.validateURL(url)) {
-                    await sock.sendMessage(from, { text: "❌ Couldn't resolve a valid YouTube link from that." });
-                    return;
-                }
-
-                await sock.sendMessage(from, { text: "⏳ Downloading, please wait..." });
-
-                const info = await ytdl.getInfo(url);
-                const title = info.videoDetails.title;
+                const filePath = path.join(tmpDir, matchFile);
+                const buffer = fs.readFileSync(filePath);
+                const title = matchFile.replace(/^yt_\d+_\d+\./, "").replace(/\.[^/.]+$/, "") || "media";
 
                 if (wantsVideo) {
-                    let format = ytdl.chooseFormat(info.formats, { filter: "audioandvideo", quality: "highest" });
-                    if (!format) {
-                        format = ytdl.chooseFormat(info.formats, { filter: (f) => f.hasVideo && f.hasAudio });
-                    }
-                    if (!format) throw new Error("No playable video format found for this link.");
-
-                    const stream = ytdl.downloadFromInfo(info, { format });
-                    await sock.sendMessage(from, { video: { stream }, caption: `🎬 ${title}`, mimetype: "video/mp4" }, { quoted: msg });
+                    await sock.sendMessage(from, { video: buffer, caption: `🎬 ${title}`, mimetype: "video/mp4" }, { quoted: msg });
                 } else {
-                    let format = ytdl.chooseFormat(info.formats, { filter: "audioonly", quality: "highest" });
-                    if (!format) {
-                        format = ytdl.chooseFormat(info.formats, { filter: (f) => f.hasAudio });
-                    }
-                    if (!format) throw new Error("No playable audio format found for this link.");
-
-                    const stream = ytdl.downloadFromInfo(info, { format });
-                    await sock.sendMessage(from, { audio: { stream }, mimetype: "audio/mp4", fileName: `${title}.mp3` }, { quoted: msg });
+                    await sock.sendMessage(from, { audio: buffer, mimetype: "audio/mp4", fileName: `${title}.m4a` }, { quoted: msg });
                 }
+
+                fs.unlink(filePath, () => {});
             } catch (err) {
-                await sock.sendMessage(from, { text: `❌ Download failed: ${err.message}\n\nAgar ye baar baar aa raha hai to terminal mein "npm install @distube/ytdl-core@latest" chala kar package update karein.` });
+                if (isOwner(msg, config)) {
+                    await sock.sendMessage(from, {
+                        text: `❌ Download failed: ${err.message}\n\nAgar "yt-dlp not found" wala error hai, to yt-dlp install karein: winget install yt-dlp (PowerShell mein), phir terminal band karke dobara bot start karein.`,
+                    });
+                } else {
+                    await sock.sendMessage(from, { text: "❌ Sorry, couldn't download that right now. Please try again later." });
+                }
             }
         },
     },
