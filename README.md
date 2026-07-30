@@ -79,7 +79,13 @@ On first run, you'll be asked to enter your WhatsApp number to generate a **pair
 
 A small private tool to generate your `SESSION_ID` using either a QR code or a pairing code — instead of using any third-party pairing website.
 
-**Live Link:** [whatsapp-session-pair-code.onrender.com](https://whatsapp-session-pair-code.onrender.com)
+**Get Your Session ID:**
+
+<div align="center">
+  <a href="https://whatsapp-session-pair-code.onrender.com" target="_blank">
+    <img alt="Generate Session ID" src="https://img.shields.io/badge/Generate%20Session%20ID-FF00FF?style=for-the-badge&logo=whatsapp&logoColor=white">
+  </a>
+</div>
 
 ### How to Generate Your Session ID
 
