@@ -22,48 +22,39 @@ const config = require("./config");
 const SESSION_FOLDER = "./session";
 const PREFIX = config.PREFIX || ".";
 
+// In-memory store for antidelete feature (keeps last 500 messages)
+const messageStore = new Map();
+function rememberMessage(key, content) {
+    messageStore.set(key, content);
+    if (messageStore.size > 500) {
+        const oldestKey = messageStore.keys().next().value;
+        messageStore.delete(oldestKey);
+    }
+}
+
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 const question = (text) => new Promise((resolve) => rl.question(text, resolve));
 
 // ============================================
-// Load all commands from /commands folder automatically
+// Load all commands from commands.js
 // ============================================
+const commandList = require("./commands");
 const commands = new Map();
 
-function loadCommands() {
-    commands.clear();
-    const commandsPath = path.join(__dirname, "commands");
-    if (!fs.existsSync(commandsPath)) fs.mkdirSync(commandsPath);
-
-    const files = fs.readdirSync(commandsPath).filter((f) => f.endsWith(".js"));
-
-    for (const file of files) {
-        try {
-            delete require.cache[require.resolve(`./commands/${file}`)];
-            const command = require(`./commands/${file}`);
-
-            if (!command.name || typeof command.execute !== "function") {
-                console.log(`⚠️  Skipping ${file} — missing "name" or "execute" function.`);
-                continue;
-            }
-
-            commands.set(command.name, command);
-
-            // Support multiple aliases per command
-            if (Array.isArray(command.aliases)) {
-                for (const alias of command.aliases) {
-                    commands.set(alias, command);
-                }
-            }
-        } catch (err) {
-            console.log(`❌ Error loading command ${file}:`, err.message);
+for (const command of commandList) {
+    if (!command.name || typeof command.execute !== "function") {
+        console.log(`⚠️  Skipping a command — missing "name" or "execute" function.`);
+        continue;
+    }
+    commands.set(command.name, command);
+    if (Array.isArray(command.aliases)) {
+        for (const alias of command.aliases) {
+            commands.set(alias, command);
         }
     }
-
-    console.log(`✅ Loaded ${files.length} command file(s), ${commands.size} total command(s)/alias(es).`);
 }
 
-loadCommands();
+console.log(`✅ Loaded ${commandList.length} command(s), ${commands.size} total with aliases.`);
 
 // ============================================
 // Start WhatsApp Connection
@@ -100,6 +91,11 @@ async function startBot() {
             if (shouldReconnect) startBot();
         } else if (connection === "open") {
             console.log("✅ Bot successfully connect ho gaya WhatsApp se!");
+            if (config.ALWAYS_ONLINE === "true" || config.ALWAYS_ONLINE === true) {
+                setInterval(() => {
+                    sock.sendPresenceUpdate("available").catch(() => {});
+                }, 30000);
+            }
         }
     });
 
@@ -108,9 +104,42 @@ async function startBot() {
     // ============================================
     sock.ev.on("messages.upsert", async ({ messages }) => {
         const msg = messages[0];
-        if (!msg.message || msg.key.fromMe) return;
+        if (!msg.message) return;
 
         const from = msg.key.remoteJid;
+
+        // Auto-read messages if enabled
+        if ((config.AUTOREAD === "true" || config.AUTOREAD === true) && !msg.key.fromMe) {
+            await sock.readMessages([msg.key]).catch(() => {});
+        }
+
+        // Store message content for antidelete feature
+        if (config.ANTIDELETE === "true" || config.ANTIDELETE === true) {
+            const text =
+                msg.message.conversation ||
+                msg.message.extendedTextMessage?.text ||
+                msg.message.imageMessage?.caption ||
+                msg.message.videoMessage?.caption ||
+                "[Media message]";
+            rememberMessage(`${from}_${msg.key.id}`, { text, sender: msg.key.participant || from });
+        }
+
+        // Handle deleted message (revocation)
+        if (msg.message.protocolMessage?.type === 0) {
+            if (config.ANTIDELETE === "true" || config.ANTIDELETE === true) {
+                const revokedId = msg.message.protocolMessage.key.id;
+                const stored = messageStore.get(`${from}_${revokedId}`);
+                if (stored) {
+                    const destination = config.ANTI_DEL_PATH === "same" ? from : (config.OWNER_NUMBER + "@s.whatsapp.net");
+                    await sock.sendMessage(destination, {
+                        text: `🗑️ *Deleted message detected*\n👤 From: ${stored.sender.split("@")[0]}\n💬 ${stored.text}`,
+                    }).catch(() => {});
+                }
+            }
+            return;
+        }
+
+        if (msg.key.fromMe) return;
         const isGroup = from.endsWith("@g.us");
         const text =
             msg.message.conversation ||
@@ -120,6 +149,15 @@ async function startBot() {
             "";
 
         if (!text.startsWith(PREFIX)) return;
+
+        // Show typing/recording indicator if enabled
+        try {
+            if (config.AUTOTYPING === "true" || config.AUTOTYPING === true) {
+                await sock.sendPresenceUpdate("composing", from);
+            } else if (config.RECORDING === "true" || config.RECORDING === true) {
+                await sock.sendPresenceUpdate("recording", from);
+            }
+        } catch {}
 
         const args = text.slice(PREFIX.length).trim().split(/ +/);
         const commandName = args.shift().toLowerCase();
@@ -135,6 +173,7 @@ async function startBot() {
                 text,
                 msg,
                 config,
+                allCommands: commandList,
             });
         } catch (err) {
             console.log(`❌ Error running command "${commandName}":`, err.message);
@@ -168,10 +207,37 @@ async function startBot() {
         }
     });
 
+    // ============================================
+    // Anti-Call - reject incoming calls if enabled
+    // ============================================
+    sock.ev.on("call", async (calls) => {
+        if (config.ANTICALL !== "true" && config.ANTICALL !== true) return;
+        for (const call of calls) {
+            const callerJid = call.from;
+            if (!callerJid || call.status !== "offer") continue;
+            try {
+                await sock.rejectCall(call.id, callerJid);
+                const msgText = config.ANTICALL_MSG || "📵 Calls are not allowed. Your call was rejected.";
+                await sock.sendMessage(callerJid, { text: msgText });
+            } catch {}
+        }
+    });
+
+    // ============================================
+    // Admin Action notifications (promote/demote)
+    // ============================================
+    sock.ev.on("group-participants.update", async (update) => {
+        if (config.ADMIN_ACTION === "true" || config.ADMIN_ACTION === true) {
+            if (update.action === "promote" || update.action === "demote") {
+                const names = update.participants.map((p) => p.split("@")[0]).join(", ");
+                await sock.sendMessage(update.id, {
+                    text: `⚙️ ${names} was ${update.action}d.`,
+                }).catch(() => {});
+            }
+        }
+    });
+
     return sock;
 }
 
 startBot();
-
-// Hot-reload commands if you add new files while bot is running (optional dev convenience)
-module.exports = { loadCommands, commands };
