@@ -1,8 +1,8 @@
- {
-  "name": "DARKZONE-MD",
-  "description": "Javascript WhatsApp bot made by 𝐸𝑅𝐹𝒜𝒩 𝒜𝐻𝑀𝒜𝒟",
-  "logo": "https://files.catbox.moe/jecbfo.jpg",
-  "keywords": ["DARKZONE-MD"],
+{
+  "name": "Tasmee-Ai-Bot",
+  "description": "Personal WhatsApp automation bot",
+  "logo": "https://i.ibb.co/4w5gxSM1/tasmee-ai-bot.png",
+  "keywords": ["Tasmee-Ai-Bot"],
   "success_url": "/",
   "stack": "container",
   "env": {
@@ -10,32 +10,32 @@
       "description": "Put the session-id here.",
       "required": true,
       "value": ""
-    },  
-    
+    },
+
     "STICKER_NAME": {
       "description": "type your sticker pack name.",
       "required": false,
-      "value": "𝐸𝑅𝐹𝒜𝒩"
-    }, 
-      
+      "value": "Tasmee ul Hasnain"
+    },
+
     "PREFIX": {
       "description": "paste your bot prefix note! Don't apply null prefix.",
       "required": false,
       "value": "."
-    }, 
-      
+    },
+
     "ANTI_CALL": {
       "description": "on anti call anyone not disturb you",
       "required": false,
       "value": "false"
     },
-      
+
     "AUTO_DOWNLOADER": {
       "description": "AUTO DOWNLOADER . TIK,FB,YT ,ETC ",
       "required": false,
       "value": "false"
     },
-    
+
     "MODE": {
       "description": "select your bot work type public-private-inbox-group.",
       "required": false,
@@ -45,68 +45,68 @@
     "ANTI_DELETE": {
       "description": "set true for show deleted messages.",
       "required": false,
-      "value": "true"  
+      "value": "true"
     },
-    
+
     "ALWAYS_ONLINE": {
       "description": "Make it true if want always online.",
       "required": false,
-      "value": "false"  
-    },    
-   
+      "value": "false"
+    },
+
     "AUTO_REPLY": {
       "description": "Make it true if you want automatic reply.",
       "required": false,
       "value": "false"
-    }, 
+    },
 
     "AUTO_STICKER": {
       "description": "Make it true if you want automatic sticker.",
       "required": false,
       "value": "false"
-    }, 
+    },
 
     "AUTO_STATUS_SEEN": {
       "description": "Make it true for automatic status seen.",
       "required": true,
       "value": "true"
-    }, 
+    },
 
     "AUTO_STATUS_REACT": {
       "description": "make it true for automatic status reaction or like.",
       "required": true,
       "value": "false"
-    }, 
+    },
 
     "AUTO_STATUS_REPLY": {
       "description": "Make it true for auto reply msg on status seen.",
       "required": true,
       "value": "false"
-    }, 
+    },
 
     "AUTO_STATUS_MSG": {
       "description": "Type custom message on status reply",
       "required": true,
-      "value": "*SEEN YOUR STATUS BY DARKZONE-MD ❤️*"
-    }, 
-    
+      "value": "*Tasmee-Ai-Bot VIEWED YOUR STATUS ❤️*"
+    },
+
     "OWNER_NAME": {
       "description": "Type Bot Owner Name.",
       "required": false,
-      "value": "ERFAN"
-    }, 
+      "value": "Tasmee ul Hasnain"
+    },
 
     "OWNER_NUMBER": {
-      "description": "put the owner number for bot.",
-      "required": false,
-      "value": "923306137477"
-    }, 
+      "description": "put YOUR OWN WhatsApp number here (with country code, no + or spaces).",
+      "required": true,
+      "value": ""
+    },
 
     "BOT_NAME": {
       "description": "Type here the bot name.",
       "required": false,
-      "value": "DARKZONE-MD"
-    }, 
+      "value": "Tasmee-Ai-Bot"
+    },
 
     "ANTI_LINK": {
       "description": "Make it true if you want bot auto remove group link.",
@@ -119,7 +119,7 @@
       "required": true,
       "value": "false"
     },
-    
+
     "ANTI_BAD": {
       "description": "Make it true if you want bot auto delete bad words.",
       "required": false,
@@ -131,17 +131,17 @@
       "required": false,
       "value": "false"
     },
-    
+
     "MENU_IMAGE_URL": {
       "description": "add url for mention reply and menu if want.",
       "required": false,
-      "value": "https://i.ibb.co/Sw4pzTWC/IMG-20260124-WA0728.jpg"
+      "value": "https://i.ibb.co/4w5gxSM1/tasmee-ai-bot.png"
     },
-    
+
     "DESCRIPTION": {
       "description": "add caption for menu and other",
       "required": false,
-      "value": "*CREATER 𝐸𝑅𝐹𝒜𝒩 𝒜𝐻𝑀𝒜𝒟*"
+      "value": "*CREATOR Tasmee ul Hasnain*"
     },
 
     "DELETE_LINKS": {
@@ -149,7 +149,7 @@
       "required": false,
       "value": "false"
     },
-    
+
     "AUTO_RECORDING": {
       "description": "Make it true if you want auto recoding.",
       "required": false,
@@ -167,24 +167,24 @@
       "required": false,
       "value": "false"
     },
-    
+
     "CUSTOM_REACT": {
       "description": "Make it true if you want custom reactions.",
       "required": false,
       "value": "false"
-    }, 
-    
+    },
+
     "CUSTOM_REACT_EMOJIS": {
       "description": "put here custom react react emojis.",
       "required": false,
       "value": "💝,💖,💗,❤️‍🩹,❤️,🧡,💛,💚,💙,💜,🤎,🖤,🤍"
-    }, 
-    
+    },
+
     "ANTI_DEL_PATH": {
       "description": "change it to -same- if you want to resend deleted message in same chat othwise inbox",
       "required": false,
       "value": "inbox"
-    }, 
+    },
 
     "ADMIN_EVENTS": {
       "description": "make it true if want know who promote or demote a member .",
