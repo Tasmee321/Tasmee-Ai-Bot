@@ -109,12 +109,12 @@ async function startBot() {
         const from = msg.key.remoteJid;
 
         // Auto-read messages if enabled
-        if ((config.AUTOREAD === "true" || config.AUTOREAD === true) && !msg.key.fromMe) {
+        if ((config.READ_MESSAGE === "true" || config.READ_MESSAGE === true) && !msg.key.fromMe) {
             await sock.readMessages([msg.key]).catch(() => {});
         }
 
         // Store message content for antidelete feature
-        if (config.ANTIDELETE === "true" || config.ANTIDELETE === true) {
+        if (config.ANTI_DELETE === "true" || config.ANTI_DELETE === true) {
             const text =
                 msg.message.conversation ||
                 msg.message.extendedTextMessage?.text ||
@@ -126,7 +126,7 @@ async function startBot() {
 
         // Handle deleted message (revocation)
         if (msg.message.protocolMessage?.type === 0) {
-            if (config.ANTIDELETE === "true" || config.ANTIDELETE === true) {
+            if (config.ANTI_DELETE === "true" || config.ANTI_DELETE === true) {
                 const revokedId = msg.message.protocolMessage.key.id;
                 const stored = messageStore.get(`${from}_${revokedId}`);
                 if (stored) {
@@ -139,10 +139,11 @@ async function startBot() {
             return;
         }
 
-        if (msg.key.fromMe) return;
+        // Note: we no longer return early on fromMe, so commands sent from your own
+        // WhatsApp (self-chat / testing) still get processed.
 
-        // Auto-react to messages if enabled
-        if (config.AUTOREACT === "true" || config.AUTOREACT === true) {
+        // Auto-react to messages if enabled (skip reacting to your own outgoing messages)
+        if (!msg.key.fromMe && (config.AUTO_REACT === "true" || config.AUTO_REACT === true)) {
             const emojiList = (config.CUSTOM_REACT_EMOJIS || "❤️,😂,👍,🔥,😍,😮").split(",");
             const randomEmoji = emojiList[Math.floor(Math.random() * emojiList.length)].trim();
             await sock.sendMessage(from, {
@@ -161,9 +162,9 @@ async function startBot() {
 
         // Show typing/recording indicator if enabled
         try {
-            if (config.AUTOTYPING === "true" || config.AUTOTYPING === true) {
+            if (config.AUTO_TYPING === "true" || config.AUTO_TYPING === true) {
                 await sock.sendPresenceUpdate("composing", from);
-            } else if (config.RECORDING === "true" || config.RECORDING === true) {
+            } else if (config.AUTO_RECORDING === "true" || config.AUTO_RECORDING === true) {
                 await sock.sendPresenceUpdate("recording", from);
             }
         } catch {}
@@ -203,13 +204,17 @@ async function startBot() {
             const name = participant.split("@")[0];
 
             if (update.action === "add") {
+                const template = config.WELCOME_MSG || "👋 Welcome @{name} to *{group}*!";
+                const finalText = template.replace("{name}", `@${name}`).replace("{group}", groupName);
                 await sock.sendMessage(update.id, {
-                    text: `👋 Welcome @${name} to *${groupName}*!`,
+                    text: finalText,
                     mentions: [participant],
                 });
             } else if (update.action === "remove") {
+                const template = config.GOODBYE_MSG || "👋 @{name} left *{group}*. Goodbye!";
+                const finalText = template.replace("{name}", `@${name}`).replace("{group}", groupName);
                 await sock.sendMessage(update.id, {
-                    text: `👋 @${name} left *${groupName}*. Goodbye!`,
+                    text: finalText,
                     mentions: [participant],
                 });
             }
@@ -220,13 +225,13 @@ async function startBot() {
     // Anti-Call - reject incoming calls if enabled
     // ============================================
     sock.ev.on("call", async (calls) => {
-        if (config.ANTICALL !== "true" && config.ANTICALL !== true) return;
+        if (config.ANTI_CALL !== "true" && config.ANTI_CALL !== true) return;
         for (const call of calls) {
             const callerJid = call.from;
             if (!callerJid || call.status !== "offer") continue;
             try {
                 await sock.rejectCall(call.id, callerJid);
-                const msgText = config.ANTICALL_MSG || "📵 Calls are not allowed. Your call was rejected.";
+                const msgText = config.REJECT_MSG || "📵 Calls are not allowed. Your call was rejected.";
                 await sock.sendMessage(callerJid, { text: msgText });
             } catch {}
         }
