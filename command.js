@@ -95,7 +95,16 @@ module.exports = [
 
             menu += `\n©️ ᴘᴏᴡᴇʀᴇᴅ ʙʏ ${config.OWNER_NAME || "Tasmee ul Hasnain"}`;
 
-            await sock.sendMessage(from, { text: menu });
+            if (config.MENU_IMAGE_URL) {
+                await sock.sendMessage(from, {
+                    image: { url: config.MENU_IMAGE_URL },
+                    caption: menu,
+                }).catch(async () => {
+                    await sock.sendMessage(from, { text: menu });
+                });
+            } else {
+                await sock.sendMessage(from, { text: menu });
+            }
         },
     },
 
@@ -558,11 +567,11 @@ module.exports = [
     {
         name: "setwelcome",
         aliases: [],
-        description: "Set a custom welcome message. Usage: .setwelcome <text>",
+        description: "Set a custom welcome message. Usage: .setwelcome <text with {name} and {group}>",
         async execute(sock, { from, args, config, msg }) {
             if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const text = args.join(" ");
-            if (!text) return sock.sendMessage(from, { text: `Current: *${config.WELCOME_MSG || "(default)"}*` });
+            if (!text) return sock.sendMessage(from, { text: `Current: *${config.WELCOME_MSG || "(default)"}*\n\nUsage: .setwelcome Welcome {name} to {group}!` });
             config.WELCOME_MSG = text;
             await sock.sendMessage(from, { text: `✅ Welcome message updated.` });
         },
@@ -570,11 +579,11 @@ module.exports = [
     {
         name: "setgoodbye",
         aliases: [],
-        description: "Set a custom goodbye message. Usage: .setgoodbye <text>",
+        description: "Set a custom goodbye message. Usage: .setgoodbye <text with {name} and {group}>",
         async execute(sock, { from, args, config, msg }) {
             if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const text = args.join(" ");
-            if (!text) return sock.sendMessage(from, { text: `Current: *${config.GOODBYE_MSG || "(default)"}*` });
+            if (!text) return sock.sendMessage(from, { text: `Current: *${config.GOODBYE_MSG || "(default)"}*\n\nUsage: .setgoodbye Bye {name} from {group}!` });
             config.GOODBYE_MSG = text;
             await sock.sendMessage(from, { text: `✅ Goodbye message updated.` });
         },
@@ -775,38 +784,76 @@ module.exports = [
     },
 
     // ---------------------------------------
-    // .yt / .youtube - media downloader
+    // .yt / .youtube - media downloader (link OR song/video name)
     // ---------------------------------------
     {
         name: "yt",
         aliases: ["youtube", "ytmp3", "ytmp4"],
-        description: "Download YouTube audio/video. Usage: .yt <link> audio|video",
+        description: "Download YouTube audio/video. Usage: .yt <link OR song name> [audio|video]",
         async execute(sock, { from, args, text, msg }) {
-            const url = args.find((a) => a.includes("youtube.com") || a.includes("youtu.be"));
+            const wantsVideo = /\bvideo\b/i.test(text) || text.includes("ytmp4");
 
-            if (!url || !ytdl.validateURL(url)) {
+            // Remove the "audio"/"video" keyword from args so it isn't treated as part of a search query
+            const cleanArgs = args.filter((a) => !/^(audio|video)$/i.test(a));
+            const directUrl = cleanArgs.find((a) => a.includes("youtube.com") || a.includes("youtu.be"));
+
+            if (!directUrl && cleanArgs.length === 0) {
                 await sock.sendMessage(from, {
-                    text: "❌ Please provide a valid YouTube link.\nExample: *.yt https://youtu.be/xxxx audio*",
+                    text: "❌ Please provide a YouTube link or a song/video name.\nExample: *.yt Attention Charlie Puth audio*\nOr: *.yt https://youtu.be/xxxx video*",
                 });
                 return;
             }
 
-            const wantsVideo = text.includes("video") || text.includes("ytmp4");
-            await sock.sendMessage(from, { text: "⏳ Downloading, please wait..." });
+            let url = directUrl;
 
             try {
+                // No direct link given -> search YouTube by name and use the top result
+                if (!url) {
+                    const query = cleanArgs.join(" ");
+                    await sock.sendMessage(from, { text: `🔎 Searching: *${query}*...` });
+
+                    const yts = require("yt-search");
+                    const searchResult = await yts(query);
+                    const video = searchResult?.videos?.[0];
+
+                    if (!video) {
+                        await sock.sendMessage(from, { text: "❌ No results found for that search." });
+                        return;
+                    }
+                    url = video.url;
+                }
+
+                if (!ytdl.validateURL(url)) {
+                    await sock.sendMessage(from, { text: "❌ Couldn't resolve a valid YouTube link from that." });
+                    return;
+                }
+
+                await sock.sendMessage(from, { text: "⏳ Downloading, please wait..." });
+
                 const info = await ytdl.getInfo(url);
                 const title = info.videoDetails.title;
 
                 if (wantsVideo) {
-                    const stream = ytdl(url, { quality: "18" });
+                    let format = ytdl.chooseFormat(info.formats, { filter: "audioandvideo", quality: "highest" });
+                    if (!format) {
+                        format = ytdl.chooseFormat(info.formats, { filter: (f) => f.hasVideo && f.hasAudio });
+                    }
+                    if (!format) throw new Error("No playable video format found for this link.");
+
+                    const stream = ytdl.downloadFromInfo(info, { format });
                     await sock.sendMessage(from, { video: { stream }, caption: `🎬 ${title}`, mimetype: "video/mp4" }, { quoted: msg });
                 } else {
-                    const stream = ytdl(url, { filter: "audioonly", quality: "highestaudio" });
+                    let format = ytdl.chooseFormat(info.formats, { filter: "audioonly", quality: "highest" });
+                    if (!format) {
+                        format = ytdl.chooseFormat(info.formats, { filter: (f) => f.hasAudio });
+                    }
+                    if (!format) throw new Error("No playable audio format found for this link.");
+
+                    const stream = ytdl.downloadFromInfo(info, { format });
                     await sock.sendMessage(from, { audio: { stream }, mimetype: "audio/mp4", fileName: `${title}.mp3` }, { quoted: msg });
                 }
             } catch (err) {
-                await sock.sendMessage(from, { text: `❌ Download failed: ${err.message}` });
+                await sock.sendMessage(from, { text: `❌ Download failed: ${err.message}\n\nAgar ye baar baar aa raha hai to terminal mein "npm install @distube/ytdl-core@latest" chala kar package update karein.` });
             }
         },
     },
