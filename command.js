@@ -9,6 +9,8 @@ const ytdl = require("@distube/ytdl-core");
 const fs = require("fs");
 const path = require("path");
 
+const fetch = global.fetch;
+
 // Simple helper to read/write small JSON data files (for ban list, sudo list, etc.)
 function loadJSON(filePath, fallback) {
     try {
@@ -24,6 +26,11 @@ function saveJSON(filePath, data) {
     const dir = path.dirname(fullPath);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(fullPath, JSON.stringify(data, null, 2));
+}
+
+function isOwner(msg, config) {
+    const sender = msg.key.participant || msg.key.remoteJid;
+    return sender.startsWith(config.OWNER_NUMBER);
 }
 
 module.exports = [
@@ -205,7 +212,7 @@ module.exports = [
         aliases: [],
         description: "Set bot mode. Usage: .mode public/private",
         async execute(sock, { from, args, config, msg }) {
-            if (!msg.key.fromMe) {
+            if (!isOwner(msg, config)) {
                 await sock.sendMessage(from, { text: "❌ Only the owner can use this command." });
                 return;
             }
@@ -229,18 +236,18 @@ module.exports = [
         aliases: [],
         description: "Toggle auto-read for all messages. Usage: .autoread on/off",
         async execute(sock, { from, args, config, msg }) {
-            if (!msg.key.fromMe) {
+            if (!isOwner(msg, config)) {
                 await sock.sendMessage(from, { text: "❌ Only the owner can use this command." });
                 return;
             }
             const choice = args[0]?.toLowerCase();
             if (choice !== "on" && choice !== "off") {
                 await sock.sendMessage(from, {
-                    text: `Current status: *${config.AUTOREAD === "true" ? "ON" : "OFF"}*\n\nUsage: *.autoread on/off*`,
+                    text: `Current status: *${config.READ_MESSAGE === "true" ? "ON" : "OFF"}*\n\nUsage: *.autoread on/off*`,
                 });
                 return;
             }
-            config.AUTOREAD = choice === "on" ? "true" : "false";
+            config.READ_MESSAGE = choice === "on" ? "true" : "false";
             await sock.sendMessage(from, { text: `✅ Auto-read is now *${choice.toUpperCase()}*.` });
         },
     },
@@ -253,7 +260,7 @@ module.exports = [
         aliases: [],
         description: "Ban a user from using the bot. Reply/mention + .ban",
         async execute(sock, { from, args, msg, config }) {
-            if (!msg.key.fromMe) {
+            if (!isOwner(msg, config)) {
                 await sock.sendMessage(from, { text: "❌ Only the owner can use this command." });
                 return;
             }
@@ -273,8 +280,8 @@ module.exports = [
         name: "unban",
         aliases: [],
         description: "Unban a user. Reply/mention + .unban",
-        async execute(sock, { from, args, msg }) {
-            if (!msg.key.fromMe) {
+        async execute(sock, { from, args, msg, config }) {
+            if (!isOwner(msg, config)) {
                 await sock.sendMessage(from, { text: "❌ Only the owner can use this command." });
                 return;
             }
@@ -312,8 +319,8 @@ module.exports = [
         name: "sudo",
         aliases: [],
         description: "Add a trusted sudo user. Reply/mention + .sudo",
-        async execute(sock, { from, args, msg }) {
-            if (!msg.key.fromMe) {
+        async execute(sock, { from, args, msg, config }) {
+            if (!isOwner(msg, config)) {
                 await sock.sendMessage(from, { text: "❌ Only the owner can use this command." });
                 return;
             }
@@ -333,8 +340,8 @@ module.exports = [
         name: "delsudo",
         aliases: [],
         description: "Remove a sudo user",
-        async execute(sock, { from, args, msg }) {
-            if (!msg.key.fromMe) {
+        async execute(sock, { from, args, msg, config }) {
+            if (!isOwner(msg, config)) {
                 await sock.sendMessage(from, { text: "❌ Only the owner can use this command." });
                 return;
             }
@@ -399,7 +406,7 @@ module.exports = [
                 `Prefix: ${config.PREFIX}\n` +
                 `Mode: ${config.MODE || "public"}\n` +
                 `Welcome/Goodbye: ${config.WELCOME === "true" || config.WELCOME === true ? "ON" : "OFF"}\n` +
-                `Auto-read: ${config.AUTOREAD === "true" ? "ON" : "OFF"}`;
+                `Auto-read: ${config.READ_MESSAGE === "true" ? "ON" : "OFF"}`;
             await sock.sendMessage(from, { text });
         },
     },
@@ -411,8 +418,8 @@ module.exports = [
         name: "block",
         aliases: [],
         description: "Block a user. Reply/mention + .block",
-        async execute(sock, { from, args, msg }) {
-            if (!msg.key.fromMe) {
+        async execute(sock, { from, args, msg, config }) {
+            if (!isOwner(msg, config)) {
                 await sock.sendMessage(from, { text: "❌ Only the owner can use this command." });
                 return;
             }
@@ -430,8 +437,8 @@ module.exports = [
         name: "unblock",
         aliases: [],
         description: "Unblock a user. Reply/mention + .unblock",
-        async execute(sock, { from, args, msg }) {
-            if (!msg.key.fromMe) {
+        async execute(sock, { from, args, msg, config }) {
+            if (!isOwner(msg, config)) {
                 await sock.sendMessage(from, { text: "❌ Only the owner can use this command." });
                 return;
             }
@@ -482,7 +489,7 @@ module.exports = [
         aliases: [],
         description: "Change command prefix. Usage: .prefix <symbol>",
         async execute(sock, { from, args, config, msg }) {
-            if (!msg.key.fromMe) return sock.sendMessage(from, { text: "❌ Owner only." });
+            if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             if (!args[0]) return sock.sendMessage(from, { text: `Current prefix: *${config.PREFIX}*` });
             config.PREFIX = args[0];
             await sock.sendMessage(from, { text: `✅ Prefix changed to: *${args[0]}*` });
@@ -493,7 +500,7 @@ module.exports = [
         aliases: [],
         description: "Change bot name. Usage: .botname <name>",
         async execute(sock, { from, args, config, msg }) {
-            if (!msg.key.fromMe) return sock.sendMessage(from, { text: "❌ Owner only." });
+            if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const name = args.join(" ");
             if (!name) return sock.sendMessage(from, { text: `Current bot name: *${config.BOT_NAME}*` });
             config.BOT_NAME = name;
@@ -505,7 +512,7 @@ module.exports = [
         aliases: [],
         description: "Change owner name. Usage: .ownername <name>",
         async execute(sock, { from, args, config, msg }) {
-            if (!msg.key.fromMe) return sock.sendMessage(from, { text: "❌ Owner only." });
+            if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const name = args.join(" ");
             if (!name) return sock.sendMessage(from, { text: `Current owner name: *${config.OWNER_NAME}*` });
             config.OWNER_NAME = name;
@@ -517,7 +524,7 @@ module.exports = [
         aliases: [],
         description: "Change owner number. Usage: .ownernumber <number>",
         async execute(sock, { from, args, config, msg }) {
-            if (!msg.key.fromMe) return sock.sendMessage(from, { text: "❌ Owner only." });
+            if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const number = args[0]?.replace(/[^0-9]/g, "");
             if (!number) return sock.sendMessage(from, { text: `Current owner number: *${config.OWNER_NUMBER}*` });
             config.OWNER_NUMBER = number;
@@ -529,7 +536,7 @@ module.exports = [
         aliases: [],
         description: "Change bot description. Usage: .description <text>",
         async execute(sock, { from, args, config, msg }) {
-            if (!msg.key.fromMe) return sock.sendMessage(from, { text: "❌ Owner only." });
+            if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const desc = args.join(" ");
             if (!desc) return sock.sendMessage(from, { text: `Current description: *${config.DESCRIPTION}*` });
             config.DESCRIPTION = desc;
@@ -541,7 +548,7 @@ module.exports = [
         aliases: [],
         description: "Change sticker pack name. Usage: .stickername <name>",
         async execute(sock, { from, args, config, msg }) {
-            if (!msg.key.fromMe) return sock.sendMessage(from, { text: "❌ Owner only." });
+            if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const name = args.join(" ");
             if (!name) return sock.sendMessage(from, { text: `Current sticker name: *${config.STICKER_NAME}*` });
             config.STICKER_NAME = name;
@@ -553,7 +560,7 @@ module.exports = [
         aliases: [],
         description: "Set a custom welcome message. Usage: .setwelcome <text>",
         async execute(sock, { from, args, config, msg }) {
-            if (!msg.key.fromMe) return sock.sendMessage(from, { text: "❌ Owner only." });
+            if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const text = args.join(" ");
             if (!text) return sock.sendMessage(from, { text: `Current: *${config.WELCOME_MSG || "(default)"}*` });
             config.WELCOME_MSG = text;
@@ -565,7 +572,7 @@ module.exports = [
         aliases: [],
         description: "Set a custom goodbye message. Usage: .setgoodbye <text>",
         async execute(sock, { from, args, config, msg }) {
-            if (!msg.key.fromMe) return sock.sendMessage(from, { text: "❌ Owner only." });
+            if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const text = args.join(" ");
             if (!text) return sock.sendMessage(from, { text: `Current: *${config.GOODBYE_MSG || "(default)"}*` });
             config.GOODBYE_MSG = text;
@@ -581,12 +588,12 @@ module.exports = [
         aliases: [],
         description: "Toggle showing deleted messages. Usage: .antidelete on/off",
         async execute(sock, { from, args, config, msg }) {
-            if (!msg.key.fromMe) return sock.sendMessage(from, { text: "❌ Owner only." });
+            if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const choice = args[0]?.toLowerCase();
             if (choice !== "on" && choice !== "off") {
-                return sock.sendMessage(from, { text: `Current: *${config.ANTIDELETE === "true" ? "ON" : "OFF"}*\nUsage: .antidelete on/off` });
+                return sock.sendMessage(from, { text: `Current: *${config.ANTI_DELETE === "true" ? "ON" : "OFF"}*\nUsage: .antidelete on/off` });
             }
-            config.ANTIDELETE = choice === "on" ? "true" : "false";
+            config.ANTI_DELETE = choice === "on" ? "true" : "false";
             await sock.sendMessage(from, { text: `✅ Anti-delete is now *${choice.toUpperCase()}*.` });
         },
     },
@@ -595,7 +602,7 @@ module.exports = [
         aliases: ["delpath"],
         description: "Where deleted/edited messages go. Usage: .editpath same/inbox",
         async execute(sock, { from, args, config, msg }) {
-            if (!msg.key.fromMe) return sock.sendMessage(from, { text: "❌ Owner only." });
+            if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const choice = args[0]?.toLowerCase();
             if (choice !== "same" && choice !== "inbox") {
                 return sock.sendMessage(from, { text: `Current: *${config.ANTI_DEL_PATH || "inbox"}*\nUsage: .editpath same/inbox` });
@@ -609,12 +616,12 @@ module.exports = [
         aliases: [],
         description: "Toggle recording indicator. Usage: .recording on/off",
         async execute(sock, { from, args, config, msg }) {
-            if (!msg.key.fromMe) return sock.sendMessage(from, { text: "❌ Owner only." });
+            if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const choice = args[0]?.toLowerCase();
             if (choice !== "on" && choice !== "off") {
-                return sock.sendMessage(from, { text: `Current: *${config.RECORDING === "true" ? "ON" : "OFF"}*` });
+                return sock.sendMessage(from, { text: `Current: *${config.AUTO_RECORDING === "true" ? "ON" : "OFF"}*` });
             }
-            config.RECORDING = choice === "on" ? "true" : "false";
+            config.AUTO_RECORDING = choice === "on" ? "true" : "false";
             await sock.sendMessage(from, { text: `✅ Recording indicator is now *${choice.toUpperCase()}*.` });
         },
     },
@@ -623,12 +630,12 @@ module.exports = [
         aliases: [],
         description: "Toggle typing indicator. Usage: .autotyping on/off",
         async execute(sock, { from, args, config, msg }) {
-            if (!msg.key.fromMe) return sock.sendMessage(from, { text: "❌ Owner only." });
+            if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const choice = args[0]?.toLowerCase();
             if (choice !== "on" && choice !== "off") {
-                return sock.sendMessage(from, { text: `Current: *${config.AUTOTYPING === "true" ? "ON" : "OFF"}*` });
+                return sock.sendMessage(from, { text: `Current: *${config.AUTO_TYPING === "true" ? "ON" : "OFF"}*` });
             }
-            config.AUTOTYPING = choice === "on" ? "true" : "false";
+            config.AUTO_TYPING = choice === "on" ? "true" : "false";
             await sock.sendMessage(from, { text: `✅ Auto-typing is now *${choice.toUpperCase()}*.` });
         },
     },
@@ -637,7 +644,7 @@ module.exports = [
         aliases: [],
         description: "Toggle always-online mode. Usage: .online on/off",
         async execute(sock, { from, args, config, msg }) {
-            if (!msg.key.fromMe) return sock.sendMessage(from, { text: "❌ Owner only." });
+            if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const choice = args[0]?.toLowerCase();
             if (choice !== "on" && choice !== "off") {
                 return sock.sendMessage(from, { text: `Current: *${config.ALWAYS_ONLINE === "true" ? "ON" : "OFF"}*` });
@@ -651,12 +658,12 @@ module.exports = [
         aliases: [],
         description: "Toggle auto-reacting to messages. Usage: .autoreact on/off",
         async execute(sock, { from, args, config, msg }) {
-            if (!msg.key.fromMe) return sock.sendMessage(from, { text: "❌ Owner only." });
+            if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const choice = args[0]?.toLowerCase();
             if (choice !== "on" && choice !== "off") {
-                return sock.sendMessage(from, { text: `Current: *${config.AUTOREACT === "true" ? "ON" : "OFF"}*` });
+                return sock.sendMessage(from, { text: `Current: *${config.AUTO_REACT === "true" ? "ON" : "OFF"}*` });
             }
-            config.AUTOREACT = choice === "on" ? "true" : "false";
+            config.AUTO_REACT = choice === "on" ? "true" : "false";
             await sock.sendMessage(from, { text: `✅ Auto-react is now *${choice.toUpperCase()}*.` });
         },
     },
@@ -665,12 +672,12 @@ module.exports = [
         aliases: [],
         description: "Toggle rejecting incoming calls. Usage: .anticall on/off",
         async execute(sock, { from, args, config, msg }) {
-            if (!msg.key.fromMe) return sock.sendMessage(from, { text: "❌ Owner only." });
+            if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const choice = args[0]?.toLowerCase();
             if (choice !== "on" && choice !== "off") {
-                return sock.sendMessage(from, { text: `Current: *${config.ANTICALL === "true" ? "ON" : "OFF"}*` });
+                return sock.sendMessage(from, { text: `Current: *${config.ANTI_CALL === "true" ? "ON" : "OFF"}*` });
             }
-            config.ANTICALL = choice === "on" ? "true" : "false";
+            config.ANTI_CALL = choice === "on" ? "true" : "false";
             await sock.sendMessage(from, { text: `✅ Anti-call is now *${choice.toUpperCase()}*.` });
         },
     },
@@ -679,10 +686,10 @@ module.exports = [
         aliases: [],
         description: "Set the message sent to rejected callers. Usage: .anticallmsg <text>",
         async execute(sock, { from, args, config, msg }) {
-            if (!msg.key.fromMe) return sock.sendMessage(from, { text: "❌ Owner only." });
+            if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const text = args.join(" ");
-            if (!text) return sock.sendMessage(from, { text: `Current: *${config.ANTICALL_MSG || "(default)"}*` });
-            config.ANTICALL_MSG = text;
+            if (!text) return sock.sendMessage(from, { text: `Current: *${config.REJECT_MSG || "(default)"}*` });
+            config.REJECT_MSG = text;
             await sock.sendMessage(from, { text: `✅ Anti-call message updated.` });
         },
     },
@@ -691,7 +698,7 @@ module.exports = [
         aliases: [],
         description: "Toggle promote/demote notifications. Usage: .adminaction on/off",
         async execute(sock, { from, args, config, msg }) {
-            if (!msg.key.fromMe) return sock.sendMessage(from, { text: "❌ Owner only." });
+            if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const choice = args[0]?.toLowerCase();
             if (choice !== "on" && choice !== "off") {
                 return sock.sendMessage(from, { text: `Current: *${config.ADMIN_ACTION === "true" ? "ON" : "OFF"}*` });
@@ -705,7 +712,7 @@ module.exports = [
         aliases: [],
         description: "Toggle auto-liking statuses. Usage: .statuslike on/off",
         async execute(sock, { from, args, config, msg }) {
-            if (!msg.key.fromMe) return sock.sendMessage(from, { text: "❌ Owner only." });
+            if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const choice = args[0]?.toLowerCase();
             if (choice !== "on" && choice !== "off") {
                 return sock.sendMessage(from, { text: `Current: *${config.AUTO_STATUS_REACT === "true" ? "ON" : "OFF"}*` });
@@ -745,11 +752,17 @@ module.exports = [
 
             try {
                 const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+                const controller = new AbortController();
+                setTimeout(() => controller.abort(), 30000);
                 const response = await fetch(url, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ contents: [{ parts: [{ text: question }] }] }),
+                    signal: controller.signal,
                 });
+                if (!response.ok) {
+                    throw new Error(`Gemini API Error (${response.status})`);
+                }
                 const data = await response.json();
                 const answer =
                     data?.candidates?.[0]?.content?.parts?.[0]?.text ||
