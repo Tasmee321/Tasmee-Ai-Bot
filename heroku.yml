@@ -1,8 +1,8 @@
-// DARKZONE-MD 
+# Tasmee-Ai-Bot
 
 build:
   docker:
-      worker: DockerFile
+      worker: Dockerfile
+
 run:
    worker: npm install -g pm2 && npm start
-
