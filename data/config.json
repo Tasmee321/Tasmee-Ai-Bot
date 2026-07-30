@@ -1,0 +1,9 @@
+{
+  "PREFIX": ".",
+  "BOT_NAME": "Tasmee-Ai-Bot",
+  "OWNER_NAME": "Tasmee Ul Hasnain",
+  "MODE": "public",
+  "CHATBOT": "on",
+  "MENU_IMAGE_URL": "https://i.ibb.co/4w5gxSM1/tasmee-ai-bot.png",
+  "CUSTOM_REACT_EMOJIS": "💝,💖,💗,❤️,🔥,😂,😍"
+}
