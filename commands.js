@@ -41,7 +41,62 @@ function isOwner(msg, config) {
     return ownerNumbers.some((num) => num && (senderDigits === num || senderDigits.endsWith(num)));
 }
 
-module.exports = [
+// Shared YouTube download logic, used by both the initial .yt command
+// and the audio/video reply handler in index.js
+async function downloadYt(sock, { from, msg, target, label, wantsVideo, config }) {
+    const { spawn } = require("child_process");
+    const os = require("os");
+
+    const jobId = `yt_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+    const tmpDir = os.tmpdir();
+    const outTemplate = path.join(tmpDir, `${jobId}.%(ext)s`);
+    const format = wantsVideo ? "best[ext=mp4]/best" : "bestaudio";
+
+    await sock.sendMessage(from, { text: `⏳ Downloading *${label}* as ${wantsVideo ? "video" : "audio"}, please wait...` });
+
+    const ytdlpArgs = ["-f", format, "-o", outTemplate, "--no-playlist", target];
+
+    const runYtDlp = () =>
+        new Promise((resolve, reject) => {
+            const proc = spawn("yt-dlp", ytdlpArgs);
+            let stderr = "";
+            proc.stderr.on("data", (d) => (stderr += d.toString()));
+            proc.on("error", (err) => reject(new Error(`yt-dlp not found or failed to start: ${err.message}`)));
+            proc.on("close", (code) => {
+                if (code === 0) resolve();
+                else reject(new Error(stderr.slice(-500) || `yt-dlp exited with code ${code}`));
+            });
+        });
+
+    try {
+        await runYtDlp();
+
+        const matchFile = fs.readdirSync(tmpDir).find((f) => f.startsWith(jobId));
+        if (!matchFile) throw new Error("Download finished but output file was not found.");
+
+        const filePath = path.join(tmpDir, matchFile);
+        const buffer = fs.readFileSync(filePath);
+        const title = matchFile.replace(/^yt_\d+_\d+\./, "").replace(/\.[^/.]+$/, "") || "media";
+
+        if (wantsVideo) {
+            await sock.sendMessage(from, { video: buffer, caption: `🎬 ${title}`, mimetype: "video/mp4" }, { quoted: msg });
+        } else {
+            await sock.sendMessage(from, { audio: buffer, mimetype: "audio/mp4", fileName: `${title}.m4a` }, { quoted: msg });
+        }
+
+        fs.unlink(filePath, () => {});
+    } catch (err) {
+        if (isOwner(msg, config)) {
+            await sock.sendMessage(from, {
+                text: `❌ Download failed: ${err.message}`,
+            });
+        } else {
+            await sock.sendMessage(from, { text: "❌ Sorry, couldn't download that right now. Please try again later." });
+        }
+    }
+}
+
+const allCommands = [
 
     // ---------------------------------------
     // .ping - check if bot is alive
@@ -782,7 +837,10 @@ module.exports = [
                 const response = await fetch(url, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ contents: [{ parts: [{ text: question }] }] }),
+                    body: JSON.stringify({
+                        system_instruction: { parts: [{ text: config.AI_PERSONA || "" }] },
+                        contents: [{ parts: [{ text: question }] }],
+                    }),
                     signal: controller.signal,
                 });
                 if (!response.ok) {
@@ -806,77 +864,47 @@ module.exports = [
 
     // ---------------------------------------
     // .yt / .youtube - media downloader (link OR song/video name) via yt-dlp
+    // If audio/video isn't specified, bot asks and waits for your reply.
     // ---------------------------------------
     {
         name: "yt",
         aliases: ["youtube", "ytmp3", "ytmp4"],
-        description: "Download YouTube audio/video. Usage: .yt <link OR song name> [audio|video]",
+        description: "Download YouTube audio/video. Usage: .yt <link OR song name>",
         async execute(sock, { from, args, text, msg, config }) {
-            const { spawn } = require("child_process");
-            const os = require("os");
-
-            const wantsVideo = /\bvideo\b/i.test(text) || text.includes("ytmp4");
+            const explicitVideo = /\bvideo\b/i.test(text) || text.includes("ytmp4");
+            const explicitAudio = /\baudio\b/i.test(text) || text.includes("ytmp3");
             const cleanArgs = args.filter((a) => !/^(audio|video)$/i.test(a));
             const directUrl = cleanArgs.find((a) => a.includes("youtube.com") || a.includes("youtu.be"));
 
             if (!directUrl && cleanArgs.length === 0) {
                 await sock.sendMessage(from, {
-                    text: "❌ Please provide a YouTube link or a song/video name.\nExample: *.yt Attention Charlie Puth audio*\nOr: *.yt https://youtu.be/xxxx video*",
+                    text: "❌ Please provide a YouTube link or a song/video name.\nExample: *.yt Attention Charlie Puth*\nOr: *.yt https://youtu.be/xxxx*",
                 });
                 return;
             }
 
-            // If no link was given, let yt-dlp's own search do the work (ytsearch1:<query>)
             const target = directUrl || `ytsearch1:${cleanArgs.join(" ")}`;
-            const jobId = `yt_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
-            const tmpDir = os.tmpdir();
-            const outTemplate = path.join(tmpDir, `${jobId}.%(ext)s`);
-            const format = wantsVideo ? "best[ext=mp4]/best" : "bestaudio";
+            const label = directUrl ? "this link" : cleanArgs.join(" ");
 
-            await sock.sendMessage(from, { text: directUrl ? "⏳ Downloading, please wait..." : `🔎 Searching & downloading: *${cleanArgs.join(" ")}*...` });
-
-            const ytdlpArgs = ["-f", format, "-o", outTemplate, "--no-playlist", target];
-
-            const runYtDlp = () =>
-                new Promise((resolve, reject) => {
-                    const proc = spawn("yt-dlp", ytdlpArgs);
-                    let stderr = "";
-                    proc.stderr.on("data", (d) => (stderr += d.toString()));
-                    proc.on("error", (err) => reject(new Error(`yt-dlp not found or failed to start: ${err.message}`)));
-                    proc.on("close", (code) => {
-                        if (code === 0) resolve();
-                        else reject(new Error(stderr.slice(-500) || `yt-dlp exited with code ${code}`));
-                    });
-                });
-
-            try {
-                await runYtDlp();
-
-                const matchFile = fs.readdirSync(tmpDir).find((f) => f.startsWith(jobId));
-                if (!matchFile) throw new Error("Download finished but output file was not found.");
-
-                const filePath = path.join(tmpDir, matchFile);
-                const buffer = fs.readFileSync(filePath);
-                const title = matchFile.replace(/^yt_\d+_\d+\./, "").replace(/\.[^/.]+$/, "") || "media";
-
-                if (wantsVideo) {
-                    await sock.sendMessage(from, { video: buffer, caption: `🎬 ${title}`, mimetype: "video/mp4" }, { quoted: msg });
-                } else {
-                    await sock.sendMessage(from, { audio: buffer, mimetype: "audio/mp4", fileName: `${title}.m4a` }, { quoted: msg });
-                }
-
-                fs.unlink(filePath, () => {});
-            } catch (err) {
-                if (isOwner(msg, config)) {
-                    await sock.sendMessage(from, {
-                        text: `❌ Download failed: ${err.message}\n\nAgar "yt-dlp not found" wala error hai, to yt-dlp install karein: winget install yt-dlp (PowerShell mein), phir terminal band karke dobara bot start karein.`,
-                    });
-                } else {
-                    await sock.sendMessage(from, { text: "❌ Sorry, couldn't download that right now. Please try again later." });
-                }
+            if (explicitVideo || explicitAudio) {
+                await downloadYt(sock, { from, msg, target, label, wantsVideo: explicitVideo, config });
+                return;
             }
+
+            // No format specified — ask and wait for a reply
+            module.exports.pendingYt.set(from, { target, label });
+            setTimeout(() => {
+                // expire the pending request after 60s so it doesn't linger forever
+                const pending = module.exports.pendingYt.get(from);
+                if (pending && pending.target === target) module.exports.pendingYt.delete(from);
+            }, 60000);
+
+            await sock.sendMessage(from, {
+                text: `🎬 Download *${label}* as:\n\n1️⃣ Reply *audio*\n2️⃣ Reply *video*`,
+            }, { quoted: msg });
         },
     },
+
 
     // ---------------------------------------
     // .welcome on/off - toggle group welcome messages
@@ -950,3 +978,8 @@ module.exports = [
     // ---------------------------------------
 
 ];
+
+module.exports = allCommands;
+module.exports.pendingYt = new Map();
+module.exports.downloadYt = downloadYt;
+module.exports.isOwner = isOwner;
