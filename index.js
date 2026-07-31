@@ -22,6 +22,23 @@ const config = require("./config");
 const SESSION_FOLDER = "./session";
 const PREFIX = config.PREFIX || ".";
 
+// ============================================
+// Type-based command react (always ON)
+// Maps a command's canonical name -> emoji to react with.
+// Uses command.name (not the alias typed by the user), so
+// .gpt / .gemini / .ai all map to the same "ai" entry, etc.
+// Add more entries here any time you add a new command.
+// ============================================
+const TYPE_REACT_MAP = {
+    ai: "🤖",
+    yt: "🎵",
+    tiktok: "🎬",
+    sticker: "🖼️",
+    tts: "🗣️",
+    help: "📜",
+};
+const DEFAULT_COMMAND_REACT = "✅"; // used for commands not listed above
+
 // In-memory store for antidelete feature (keeps last 500 messages)
 const messageStore = new Map();
 function rememberMessage(key, content) {
@@ -202,14 +219,13 @@ async function startBot() {
         // Note: we no longer return early on fromMe, so commands sent from your own
         // WhatsApp (self-chat / testing) still get processed.
 
-        // Auto-react to messages if enabled (skip reacting to your own outgoing messages)
-        if (!msg.key.fromMe && (config.AUTO_REACT === "true" || config.AUTO_REACT === true)) {
-            const emojiList = (config.CUSTOM_REACT_EMOJIS || "❤️,😂,👍,🔥,😍,😮").split(",");
-            const randomEmoji = emojiList[Math.floor(Math.random() * emojiList.length)].trim();
-            await sock.sendMessage(from, {
-                react: { text: randomEmoji, key: msg.key },
-            }).catch(() => {});
-        }
+        // Note: the old random auto-react (config.AUTO_REACT / .autoreact command)
+        // has been replaced by the type-based react below, which fires once the
+        // command is identified and always reacts with an emoji that matches the
+        // command's type (yt -> 🎵, ai -> 🤖, sticker -> 🖼️, etc.) instead of a
+        // random emoji on every message. The .autoreact toggle command still
+        // exists for the old on/off setting but no longer does anything by
+        // itself; the type-based react below always runs.
         const isGroup = from.endsWith("@g.us");
         const text =
             msg.message.conversation ||
@@ -302,6 +318,16 @@ async function startBot() {
         console.log(`🔎 Parsed command: "${commandName}" | found: ${!!command}`);
 
         if (!command) return;
+
+        // Type-based react — always ON. Reacts with an emoji that matches the
+        // command's type, using command.name so all aliases (.gpt/.gemini/.ai)
+        // react the same way.
+        if (!msg.key.fromMe) {
+            const reactEmoji = TYPE_REACT_MAP[command.name] || DEFAULT_COMMAND_REACT;
+            await sock.sendMessage(from, {
+                react: { text: reactEmoji, key: msg.key },
+            }).catch(() => {});
+        }
 
         try {
             await command.execute(sock, {
