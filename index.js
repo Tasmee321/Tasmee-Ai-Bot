@@ -22,6 +22,19 @@ const config = require("./config");
 const SESSION_FOLDER = "./session";
 const PREFIX = config.PREFIX || ".";
 
+// Personal number to hand out when someone urgently needs to reach the
+// owner directly (not through the bot). Used by the "urgent contact"
+// keyword check below.
+const OWNER_PERSONAL_NUMBER = "03423899407";
+const OWNER_PERSONAL_NAME = "Tasmee ul Hasnain";
+
+// Matches messages (Roman Urdu + English) where the user is either asking
+// urgently to reach the owner, OR directly asking for the owner's
+// name/number, e.g. "tasmee se baat karni hai", "zaroori baat", "urgent",
+// "owner ka number do", "tasmee ka naam kya hai".
+const URGENT_CONTACT_REGEX =
+    /\b(urgent|emergency)\b|\btalk\s*to\s*(the\s*)?(owner|tasmee)\b|\bcontact\s*(the\s*)?(owner|tasmee)\b|\breal\s*person\b|tasmee\s*se\s*baat|zaroor[ia]\s*(baat|kaam)|lazmi\s*baat|owner\s*se\s*baat|tasmee\s*se\s*contact|(owner|tasmee)('?s)?\s*(ka|ki)?\s*(number|naam|name)|please.*\bnumber\b|\bnumber\b.*please/i
+
 // ============================================
 // Type-based command react (always ON)
 // Maps a command's canonical name -> emoji to react with.
@@ -48,9 +61,6 @@ function rememberMessage(key, content) {
         messageStore.delete(oldestKey);
     }
 }
-
-// Tracks which chats have already been shown the "this is an AI" disclaimer
-const chatbotIntroduced = new Set();
 
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 const question = (text) => new Promise((resolve) => rl.question(text, resolve));
@@ -260,6 +270,25 @@ async function startBot() {
                 return;
             }
 
+            // Urgent-contact shortcut: if the user is privately asking to
+            // reach the owner directly / urgently, skip the AI reply and
+            // hand out the personal number right away.
+            if (
+                !isGroup &&
+                !msg.key.fromMe &&
+                text.trim() &&
+                URGENT_CONTACT_REGEX.test(text)
+            ) {
+                await sock.sendMessage(
+                    from,
+                    {
+                        text: `📞 Ji zaroor, aap seedha baat kar sakte hain:\n*${OWNER_PERSONAL_NAME}*\n*${OWNER_PERSONAL_NUMBER}*`,
+                    },
+                    { quoted: msg }
+                );
+                return;
+            }
+
             // AI auto-chat: reply like an assistant to private messages only
             // (not groups, not your own outgoing messages, not empty text)
             if (
@@ -271,12 +300,11 @@ async function startBot() {
                 const apiKey = config.GEMINI_API_KEY || process.env.GEMINI_API_KEY;
                 if (apiKey) {
                     try {
-                        if (!chatbotIntroduced.has(from)) {
-                            chatbotIntroduced.add(from);
-                            await sock.sendMessage(from, {
-                                text: `🤖 _Heads up: this is ${config.BOT_NAME || "an AI assistant"} replying automatically. Message ${config.OWNER_NAME || "the owner"} directly if you need a real person._`,
-                            });
-                        }
+                        // No canned "I'm an AI" intro here on purpose — the bot
+                        // should just chat naturally like a person. AI_PERSONA
+                        // (config.js) already tells the model itself to
+                        // mention .menu for downloads and to hand out the
+                        // owner's number only if directly asked/urgent.
                         const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
                         const controller = new AbortController();
                         setTimeout(() => controller.abort(), 30000);
