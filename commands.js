@@ -212,56 +212,68 @@ const allCommands = [
                 return;
             }
 
+            const { spawn } = require("child_process");
+            const os = require("os");
+            const jobId = `tts_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+            const tmpDir = os.tmpdir();
+            const chunkPaths = [];
+
             try {
-                const url = `https://api.streamelements.com/kappa/v2/speech?voice=Brian&text=${encodeURIComponent(
-                    text
-                )}`;
+                // NOTE: StreamElements' free speech endpoint now requires an API
+                // key (started returning 401 "No API key was found"), so it's
+                // been replaced with Google Translate's TTS endpoint, which is
+                // still free/keyless. It caps each request at ~200 chars, so we
+                // split long text into chunks and stitch the audio back together.
+                const chunks = text.match(/.{1,180}(?:\s|$)/g)?.map((s) => s.trim()).filter(Boolean) || [text];
 
-                const response = await fetch(url, {
-                    headers: {
-                        // Some free/undocumented APIs (like this one) reject
-                        // requests that look like they come from a bare server
-                        // with no User-Agent — mimic a browser to be safe.
-                        "User-Agent":
-                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-                    },
-                });
+                for (let i = 0; i < chunks.length; i++) {
+                    const url = `https://translate.google.com/translate_tts?ie=UTF-8&tl=en&client=tw-ob&q=${encodeURIComponent(
+                        chunks[i]
+                    )}`;
+                    const response = await fetch(url, {
+                        headers: {
+                            "User-Agent":
+                                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+                            Referer: "https://translate.google.com/",
+                        },
+                    });
 
-                if (!response.ok || !response.headers.get("content-type")?.includes("audio")) {
-                    // Log the REAL reason instead of swallowing it — this is what
-                    // tells us if it's a rate-limit, an IP block, or a bad request.
-                    const bodyPreview = await response.text().catch(() => "");
-                    console.log(
-                        `❌ TTS upstream error | status: ${response.status} | content-type: ${response.headers.get(
-                            "content-type"
-                        )} | body: ${bodyPreview.slice(0, 300)}`
-                    );
-                    throw new Error(`TTS service did not return valid audio (status ${response.status}). Please try again.`);
+                    if (!response.ok || !response.headers.get("content-type")?.includes("audio")) {
+                        const bodyPreview = await response.text().catch(() => "");
+                        console.log(
+                            `❌ TTS upstream error | status: ${response.status} | content-type: ${response.headers.get(
+                                "content-type"
+                            )} | body: ${bodyPreview.slice(0, 300)}`
+                        );
+                        throw new Error(`TTS service did not return valid audio (status ${response.status}). Please try again.`);
+                    }
+
+                    const buf = Buffer.from(await response.arrayBuffer());
+                    const chunkPath = path.join(tmpDir, `${jobId}_${i}.mp3`);
+                    fs.writeFileSync(chunkPath, buf);
+                    chunkPaths.push(chunkPath);
                 }
 
-                const arrayBuffer = await response.arrayBuffer();
-                const mp3Buffer = Buffer.from(arrayBuffer);
+                // Stitch chunks into one mp3 (no-op copy if there's only one).
+                const mergedPath = path.join(tmpDir, `${jobId}_merged.mp3`);
+                const listPath = path.join(tmpDir, `${jobId}_list.txt`);
+                fs.writeFileSync(listPath, chunkPaths.map((p) => `file '${p}'`).join("\n"));
+
+                await new Promise((resolve, reject) => {
+                    const proc = spawn("ffmpeg", ["-y", "-f", "concat", "-safe", "0", "-i", listPath, "-c", "copy", mergedPath]);
+                    let stderr = "";
+                    proc.stderr.on("data", (d) => (stderr += d.toString()));
+                    proc.on("error", (err) => reject(new Error(`ffmpeg not found or failed: ${err.message}`)));
+                    proc.on("close", (code) => (code === 0 ? resolve() : reject(new Error(stderr.slice(-300) || `ffmpeg exited ${code}`))));
+                });
 
                 // Convert real mp3 -> real ogg/opus (proper WhatsApp voice-note
                 // format) instead of sending raw mp3 bytes labeled as a voice
                 // note. This is the same class of bug as the .yt audio issue:
                 // WhatsApp mobile checks the actual codec, not just the flag/mimetype.
-                const { spawn } = require("child_process");
-                const os = require("os");
-                const jobId = `tts_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
-                const inPath = path.join(os.tmpdir(), `${jobId}.mp3`);
-                const outPath = path.join(os.tmpdir(), `${jobId}.ogg`);
-                fs.writeFileSync(inPath, mp3Buffer);
-
+                const outPath = path.join(tmpDir, `${jobId}.ogg`);
                 await new Promise((resolve, reject) => {
-                    const proc = spawn("ffmpeg", [
-                        "-y",
-                        "-i", inPath,
-                        "-c:a", "libopus",
-                        "-ar", "48000",
-                        "-ac", "1",
-                        outPath,
-                    ]);
+                    const proc = spawn("ffmpeg", ["-y", "-i", mergedPath, "-c:a", "libopus", "-ar", "48000", "-ac", "1", outPath]);
                     let stderr = "";
                     proc.stderr.on("data", (d) => (stderr += d.toString()));
                     proc.on("error", (err) => reject(new Error(`ffmpeg not found or failed: ${err.message}`)));
@@ -269,8 +281,7 @@ const allCommands = [
                 });
 
                 const oggBuffer = fs.readFileSync(outPath);
-                fs.unlink(inPath, () => {});
-                fs.unlink(outPath, () => {});
+                [...chunkPaths, mergedPath, listPath, outPath].forEach((p) => fs.unlink(p, () => {}));
 
                 await sock.sendMessage(
                     from,
