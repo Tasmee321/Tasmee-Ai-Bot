@@ -64,6 +64,46 @@ function rememberMessage(key, content) {
     }
 }
 
+// ============================================
+// Natural-language intent detection (no "." prefix needed)
+// Lets people just ask normally — "mujhe ek gana chahiye" or
+// "voice note bana do" — and the bot ACTUALLY runs the real
+// download / TTS command instead of just talking about it.
+// Each is a simple two-step ask -> act flow, mirroring how a
+// person would naturally ask a follow-up question.
+// ============================================
+const pendingSongRequest = new Map(); // from -> timestamp
+const pendingTTSRequest = new Map(); // from -> timestamp
+const PENDING_INTENT_TTL = 2 * 60 * 1000; // 2 minutes
+
+function setPending(map, id) {
+    map.set(id, Date.now());
+    setTimeout(() => {
+        const ts = map.get(id);
+        if (ts && Date.now() - ts >= PENDING_INTENT_TTL) map.delete(id);
+    }, PENDING_INTENT_TTL);
+}
+
+function consumePending(map, id) {
+    const ts = map.get(id);
+    if (!ts) return false;
+    map.delete(id);
+    if (Date.now() - ts > PENDING_INTENT_TTL) return false;
+    return true;
+}
+
+const DOWNLOAD_TOPIC_REGEX = /\b(song|gana|gaana|track|music|video)\b/i;
+const WANT_REGEX = /\b(chahiye|chaiye|chahye|chahiy|do|bhejo|send|download|dedo|kardo)\b/i;
+function isDownloadRequest(text) {
+    return DOWNLOAD_TOPIC_REGEX.test(text) && WANT_REGEX.test(text);
+}
+
+const TTS_TOPIC_REGEX = /\bvoice\s*note\b|\bawaaz\s*mein\b|\bbol\s*kar\s*sunao\b|\bpadh\s*kar\s*sunao\b/i;
+const TTS_ACTION_REGEX = /\b(bana|bnao|bnado|bna|karo|kardo|bhejo|chahiye|chaiye)\b/i;
+function isTtsRequest(text) {
+    return TTS_TOPIC_REGEX.test(text) && TTS_ACTION_REGEX.test(text);
+}
+
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 const question = (text) => new Promise((resolve) => rl.question(text, resolve));
 
@@ -407,6 +447,33 @@ async function startBot() {
                 return;
             }
 
+            // Follow-up to "which song/video?" — actually starts the real
+            // download flow (reuses the same .yt logic, incl. audio/video ask).
+            if (!isGroup && !msg.key.fromMe && text.trim() && consumePending(pendingSongRequest, from)) {
+                const explicitVideo = /\bvideo\b/i.test(text);
+                const explicitAudio = /\baudio\b/i.test(text);
+                await commandList.startYtFlow(sock, {
+                    from,
+                    msg,
+                    query: text,
+                    wantsVideo: explicitVideo ? true : explicitAudio ? false : null,
+                    config,
+                });
+                return;
+            }
+
+            // Follow-up to "what text should I turn into a voice note?" —
+            // actually generates and sends a real voice note.
+            if (!isGroup && !msg.key.fromMe && text.trim() && consumePending(pendingTTSRequest, from)) {
+                try {
+                    const oggBuffer = await commandList.synthesizeSpeech(text);
+                    await sock.sendMessage(from, { audio: oggBuffer, mimetype: "audio/ogg; codecs=opus", ptt: true }, { quoted: msg });
+                } catch (err) {
+                    await sock.sendMessage(from, { text: `❌ Voice note nahi ban saka: ${err.message}` }, { quoted: msg });
+                }
+                return;
+            }
+
             // Urgent-contact shortcut: if the user is privately asking to
             // reach the owner directly / urgently, skip the AI reply and
             // hand out the personal number right away.
@@ -423,6 +490,28 @@ async function startBot() {
                     },
                     { quoted: msg }
                 );
+                return;
+            }
+
+            // Natural "mujhe gana chahiye" / "video chahiye" style request —
+            // ask which one, then actually download it once they answer
+            // (handled by the pendingSongRequest check above).
+            if (!isGroup && !msg.key.fromMe && text.trim() && isDownloadRequest(text)) {
+                setPending(pendingSongRequest, from);
+                await sock.sendMessage(from, {
+                    text: "🎵 Zaroor! Konsa gana ya video chahiye? Naam ya link bhej dein.",
+                }, { quoted: msg });
+                return;
+            }
+
+            // Natural "voice note bana do" style request — ask for the
+            // text, then actually generate it (handled by the
+            // pendingTTSRequest check above).
+            if (!isGroup && !msg.key.fromMe && text.trim() && isTtsRequest(text)) {
+                setPending(pendingTTSRequest, from);
+                await sock.sendMessage(from, {
+                    text: "🎙️ Theek hai! Kaunsa text voice note mein chahiye? Likh dein.",
+                }, { quoted: msg });
                 return;
             }
 
