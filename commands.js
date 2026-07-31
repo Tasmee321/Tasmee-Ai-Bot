@@ -217,18 +217,64 @@ const allCommands = [
                     text
                 )}`;
 
-                const response = await fetch(url);
+                const response = await fetch(url, {
+                    headers: {
+                        // Some free/undocumented APIs (like this one) reject
+                        // requests that look like they come from a bare server
+                        // with no User-Agent — mimic a browser to be safe.
+                        "User-Agent":
+                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+                    },
+                });
 
                 if (!response.ok || !response.headers.get("content-type")?.includes("audio")) {
-                    throw new Error("TTS service did not return valid audio. Please try again.");
+                    // Log the REAL reason instead of swallowing it — this is what
+                    // tells us if it's a rate-limit, an IP block, or a bad request.
+                    const bodyPreview = await response.text().catch(() => "");
+                    console.log(
+                        `❌ TTS upstream error | status: ${response.status} | content-type: ${response.headers.get(
+                            "content-type"
+                        )} | body: ${bodyPreview.slice(0, 300)}`
+                    );
+                    throw new Error(`TTS service did not return valid audio (status ${response.status}). Please try again.`);
                 }
 
                 const arrayBuffer = await response.arrayBuffer();
-                const audioBuffer = Buffer.from(arrayBuffer);
+                const mp3Buffer = Buffer.from(arrayBuffer);
+
+                // Convert real mp3 -> real ogg/opus (proper WhatsApp voice-note
+                // format) instead of sending raw mp3 bytes labeled as a voice
+                // note. This is the same class of bug as the .yt audio issue:
+                // WhatsApp mobile checks the actual codec, not just the flag/mimetype.
+                const { spawn } = require("child_process");
+                const os = require("os");
+                const jobId = `tts_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+                const inPath = path.join(os.tmpdir(), `${jobId}.mp3`);
+                const outPath = path.join(os.tmpdir(), `${jobId}.ogg`);
+                fs.writeFileSync(inPath, mp3Buffer);
+
+                await new Promise((resolve, reject) => {
+                    const proc = spawn("ffmpeg", [
+                        "-y",
+                        "-i", inPath,
+                        "-c:a", "libopus",
+                        "-ar", "48000",
+                        "-ac", "1",
+                        outPath,
+                    ]);
+                    let stderr = "";
+                    proc.stderr.on("data", (d) => (stderr += d.toString()));
+                    proc.on("error", (err) => reject(new Error(`ffmpeg not found or failed: ${err.message}`)));
+                    proc.on("close", (code) => (code === 0 ? resolve() : reject(new Error(stderr.slice(-300) || `ffmpeg exited ${code}`))));
+                });
+
+                const oggBuffer = fs.readFileSync(outPath);
+                fs.unlink(inPath, () => {});
+                fs.unlink(outPath, () => {});
 
                 await sock.sendMessage(
                     from,
-                    { audio: audioBuffer, mimetype: "audio/mpeg", ptt: true },
+                    { audio: oggBuffer, mimetype: "audio/ogg; codecs=opus", ptt: true },
                     { quoted: msg }
                 );
             } catch (err) {
