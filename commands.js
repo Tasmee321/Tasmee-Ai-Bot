@@ -10,6 +10,13 @@ const path = require("path");
 
 const fetch = global.fetch;
 
+// Shared with index.js: hand out the owner's personal number when someone
+// urgently needs to talk to them directly, or asks for it by name.
+const OWNER_PERSONAL_NUMBER = "03423899407";
+const OWNER_PERSONAL_NAME = "Tasmee ul Hasnain";
+const URGENT_CONTACT_REGEX =
+    /\b(urgent|emergency)\b|\btalk\s*to\s*(the\s*)?(owner|tasmee)\b|\bcontact\s*(the\s*)?(owner|tasmee)\b|\breal\s*person\b|tasmee\s*se\s*baat|zaroor[ia]\s*(baat|kaam)|lazmi\s*baat|owner\s*se\s*baat|tasmee\s*se\s*contact|(owner|tasmee)('?s)?\s*(ka|ki)?\s*(number|naam|name)|please.*\bnumber\b|\bnumber\b.*please/i;
+
 function loadJSON(filePath, fallback) {
     try {
         const fullPath = path.join(__dirname, filePath);
@@ -746,6 +753,15 @@ const allCommands = [
             if (!question) {
                 await sock.sendMessage(from, {
                     text: `❓ Please ask something. Example: *${config.PREFIX || "."}ai What is the capital of Pakistan?*`,
+                });
+                return;
+            }
+
+            // Urgent-contact shortcut: skip the AI call and hand out the
+            // owner's personal number right away if clearly asked/urgent.
+            if (URGENT_CONTACT_REGEX.test(question)) {
+                await sock.sendMessage(from, {
+                    text: `📞 Ji zaroor, aap seedha baat kar sakte hain:\n*${OWNER_PERSONAL_NAME}*\n*${OWNER_PERSONAL_NUMBER}*`,
                 });
                 return;
             }
