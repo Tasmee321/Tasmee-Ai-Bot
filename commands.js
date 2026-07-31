@@ -54,11 +54,22 @@ async function downloadYt(sock, { from, msg, target, label, wantsVideo, config }
 
     await sock.sendMessage(from, { text: `⏳ Downloading *${label}* as ${wantsVideo ? "video" : "audio"}, please wait...` });
 
-    const ytdlpArgs = ["-f", format, "-o", outTemplate, "--no-playlist", target];
+    const ytdlpArgs = [
+        "-f",
+        format,
+        "-o",
+        outTemplate,
+        "--no-playlist",
+        "--extractor-args",
+        "youtube:player_client=android",
+        "--geo-bypass",
+        "--no-check-certificates",
+        target,
+    ];
 
     const runYtDlp = () =>
         new Promise((resolve, reject) => {
-            const proc = spawn("yt-dlp", ytdlpArgs);
+            const proc = spawn("/usr/local/bin/yt-dlp", ytdlpArgs);
             let stderr = "";
             proc.stderr.on("data", (d) => (stderr += d.toString()));
             proc.on("error", (err) => reject(new Error(`yt-dlp not found or failed to start: ${err.message}`)));
