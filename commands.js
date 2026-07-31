@@ -65,14 +65,12 @@ async function downloadYt(sock, { from, msg, target, label, wantsVideo, config }
         "--cookies",
         path.join(__dirname, "cookies.txt"), // Path of the cookies file
         "--js-runtimes",
-        "bun", // Yahan 'node' ki jagah 'bun' likhna zaroori tha
+        "bun",
         target,
     ];
 
     const runYtDlp = () =>
         new Promise((resolve, reject) => {
-            // shell: true hata diya — args array direct spawn ko diya jata hai,
-            // isliye format string ke andar [ ] jaise characters shell se conflict nahi karte
             const proc = spawn("/usr/local/bin/yt-dlp", ytdlpArgs, {
                 env: process.env,
             });
@@ -98,7 +96,8 @@ async function downloadYt(sock, { from, msg, target, label, wantsVideo, config }
         if (wantsVideo) {
             await sock.sendMessage(from, { video: buffer, caption: `🎬 ${title}`, mimetype: "video/mp4" }, { quoted: msg });
         } else {
-            await sock.sendMessage(from, { audio: buffer, mimetype: "audio/mp4", fileName: `${title}.m4a` }, { quoted: msg });
+            // Audio mimetype aur extension .mp3 kar di hai taake mobile par bhi play ho jaye
+            await sock.sendMessage(from, { audio: buffer, mimetype: "audio/mpeg", fileName: `${title}.mp3` }, { quoted: msg });
         }
 
         fs.unlink(filePath, () => {});
