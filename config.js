@@ -38,7 +38,7 @@ module.exports = {
     // ===== OWNER SETTINGS =====
     OWNER_NUMBER:
         process.env.OWNER_NUMBER ||
-        "923423899407",
+        "923216452407",
 
     OWNER_NAME:
         process.env.OWNER_NAME ||
