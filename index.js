@@ -35,6 +35,10 @@ function rememberMessage(key, content) {
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 const question = (text) => new Promise((resolve) => rl.question(text, resolve));
 
+// Holds the live Baileys socket once created, so the HTTP routes below
+// (used for browser-based pairing when there's no interactive terminal) can reach it.
+let sockRef = null;
+
 // ============================================
 // Load all commands from commands.js
 // ============================================
@@ -95,24 +99,26 @@ async function startBot() {
         printQRInTerminal: false,
         logger: pino({ level: "silent" }),
     });
+    sockRef = sock;
 
     if (!sock.authState.creds.registered) {
-        if (!process.stdin.isTTY) {
-            // Running on a server with no interactive terminal (e.g. Render) and
-            // no valid SESSION_ID was available — don't hang forever waiting for input.
+        if (process.stdin.isTTY) {
+            const phoneNumber = await question(
+                "Apna WhatsApp number likhein (country code ke sath, e.g. 923001234567): "
+            );
+            const code = await sock.requestPairingCode(phoneNumber.trim());
+            console.log(`\nYeh raha aapka Pairing Code: ${code}\n`);
+            console.log("WhatsApp > Linked Devices > Link with phone number > yeh code enter karein.\n");
+        } else {
+            // No interactive terminal (e.g. Render) and no valid SESSION_ID.
+            // Don't exit — the /pair and /session HTTP routes (see below) let
+            // you complete pairing from a browser instead.
             console.log(
                 "❌ No valid session found and no interactive terminal available.\n" +
-                "Set a SESSION_ID environment variable (from your pairing site) and restart."
+                "Open <your-render-url>/pair in a browser to get a pairing code, " +
+                "or set a SESSION_ID environment variable and restart."
             );
-            process.exit(1);
         }
-
-        const phoneNumber = await question(
-            "Apna WhatsApp number likhein (country code ke sath, e.g. 923001234567): "
-        );
-        const code = await sock.requestPairingCode(phoneNumber.trim());
-        console.log(`\nYeh raha aapka Pairing Code: ${code}\n`);
-        console.log("WhatsApp > Linked Devices > Link with phone number > yeh code enter karein.\n");
     }
 
     sock.ev.on("creds.update", saveCreds);
@@ -293,14 +299,67 @@ async function startBot() {
 // ============================================
 // Minimal HTTP server for platforms (e.g. Render Web Service) that require
 // the app to bind to a port and respond to health checks. Harmless locally.
+//
+// Bonus: when no SESSION_ID env var is set yet (first-time server deploy,
+// "bootstrap mode"), this also exposes two convenience routes so you can
+// pair without an interactive terminal:
+//   /pair    -> get a pairing code for config.OWNER_NUMBER
+//   /session -> once linked, get the SESSION_ID string to save in Render
+// These routes automatically stop responding once SESSION_ID is set, so
+// there's no lingering exposure after initial setup.
 // ============================================
 const http = require("http");
 const PORT = process.env.PORT || 9090;
-http.createServer((req, res) => {
+const BOOTSTRAP_MODE = !(config.SESSION_ID || process.env.SESSION_ID);
+
+http.createServer(async (req, res) => {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+
+    if (BOOTSTRAP_MODE && url.pathname === "/pair") {
+        if (!sockRef) {
+            res.writeHead(200, { "Content-Type": "text/plain" });
+            return res.end("Bot is still starting up, refresh this page in a few seconds.");
+        }
+        if (sockRef.authState.creds.registered) {
+            res.writeHead(200, { "Content-Type": "text/plain" });
+            return res.end("Already linked to WhatsApp. Visit /session to get your SESSION_ID.");
+        }
+        try {
+            const number = url.searchParams.get("number") || config.OWNER_NUMBER;
+            const code = await sockRef.requestPairingCode(number.trim());
+            res.writeHead(200, { "Content-Type": "text/plain" });
+            return res.end(
+                `Pairing code for ${number}: ${code}\n\n` +
+                `Open WhatsApp > Linked Devices > Link with phone number > enter this code.\n` +
+                `Once linked, visit /session to get your SESSION_ID for Render.`
+            );
+        } catch (err) {
+            res.writeHead(500, { "Content-Type": "text/plain" });
+            return res.end(`Failed to generate pairing code: ${err.message}`);
+        }
+    }
+
+    if (BOOTSTRAP_MODE && url.pathname === "/session") {
+        const credsPath = path.join(SESSION_FOLDER, "creds.json");
+        if (!sockRef || !sockRef.authState.creds.registered || !fs.existsSync(credsPath)) {
+            res.writeHead(200, { "Content-Type": "text/plain" });
+            return res.end("Not linked yet. Visit /pair first and complete linking in WhatsApp.");
+        }
+        const raw = fs.readFileSync(credsPath, "utf-8");
+        const sessionId = Buffer.from(raw, "utf-8").toString("base64");
+        res.writeHead(200, { "Content-Type": "text/plain" });
+        return res.end(
+            `Copy this value into Render's SESSION_ID environment variable, then redeploy:\n\n${sessionId}\n`
+        );
+    }
+
     res.writeHead(200, { "Content-Type": "text/plain" });
     res.end("Tasmee-Ai-Bot is running.");
 }).listen(PORT, () => {
     console.log(`🌐 Health-check server listening on port ${PORT}`);
+    if (BOOTSTRAP_MODE) {
+        console.log("ℹ️  No SESSION_ID set — visit /pair on this server's URL to link WhatsApp from a browser.");
+    }
 });
 
 startBot();
