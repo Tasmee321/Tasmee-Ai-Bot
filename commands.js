@@ -10,7 +10,6 @@ const path = require("path");
 
 const fetch = global.fetch;
 
-// Simple helper to read/write small JSON data files (for ban list, sudo list, etc.)
 function loadJSON(filePath, fallback) {
     try {
         const fullPath = path.join(__dirname, filePath);
@@ -28,11 +27,7 @@ function saveJSON(filePath, data) {
 }
 
 function isOwner(msg, config) {
-    // If the message was sent from the bot's own linked WhatsApp account,
-    // it's always the owner — this is the most reliable check, since
-    // WhatsApp's newer "LID" JID format doesn't always match the phone number.
     if (msg.key.fromMe) return true;
-
     const sender = msg.key.participant || msg.key.remoteJid || "";
     const senderDigits = sender.replace(/[^0-9]/g, "");
     const ownerNumbers = [config.OWNER_NUMBER, config.DEV]
@@ -41,8 +36,6 @@ function isOwner(msg, config) {
     return ownerNumbers.some((num) => num && (senderDigits === num || senderDigits.endsWith(num)));
 }
 
-// Shared YouTube download logic, used by both the initial .yt command
-// and the audio/video reply handler in index.js
 async function downloadYt(sock, { from, msg, target, label, wantsVideo, config }) {
     const { spawn } = require("child_process");
     const os = require("os");
@@ -63,26 +56,16 @@ async function downloadYt(sock, { from, msg, target, label, wantsVideo, config }
         "--geo-bypass",
         "--no-check-certificates",
         "--cookies",
-        path.join(__dirname, "cookies.txt"), // Path of the cookies file
+        path.join(__dirname, "cookies.txt"),
         "--js-runtimes",
         "bun",
-        ...(wantsVideo
-            ? []
-            : // Actually convert to real mp3 (needs ffmpeg in the image) instead of
-              // just renaming whatever raw audio stream yt-dlp grabbed. WhatsApp's
-              // mobile app validates the real codec, not just the file extension —
-              // a mislabeled webm/opus file plays fine on WhatsApp Web/Desktop
-              // (browser decoder is lenient) but fails on phone ("no longer
-              // available" / resend).
-              ["--extract-audio", "--audio-format", "mp3", "--audio-quality", "0"]),
+        ...(wantsVideo ? [] : ["--extract-audio", "--audio-format", "mp3", "--audio-quality", "0"]),
         target,
     ];
 
     const runYtDlp = () =>
         new Promise((resolve, reject) => {
-            const proc = spawn("/usr/local/bin/yt-dlp", ytdlpArgs, {
-                env: process.env,
-            });
+            const proc = spawn("/usr/local/bin/yt-dlp", ytdlpArgs, { env: process.env });
             let stderr = "";
             proc.stderr.on("data", (d) => (stderr += d.toString()));
             proc.on("error", (err) => reject(new Error(`yt-dlp not found or failed to start: ${err.message}`)));
@@ -94,10 +77,8 @@ async function downloadYt(sock, { from, msg, target, label, wantsVideo, config }
 
     try {
         await runYtDlp();
-
         const matchFile = fs.readdirSync(tmpDir).find((f) => f.startsWith(jobId));
         if (!matchFile) throw new Error("Download finished but output file was not found.");
-
         const filePath = path.join(tmpDir, matchFile);
         const buffer = fs.readFileSync(filePath);
         const title = matchFile.replace(/^yt_\d+_\d+\./, "").replace(/\.[^/.]+$/, "") || "media";
@@ -105,17 +86,13 @@ async function downloadYt(sock, { from, msg, target, label, wantsVideo, config }
         if (wantsVideo) {
             await sock.sendMessage(from, { video: buffer, caption: `🎬 ${title}`, mimetype: "video/mp4" }, { quoted: msg });
         } else {
-            // Audio mimetype aur extension .mp3 kar di hai taake mobile par bhi play ho jaye
             await sock.sendMessage(from, { audio: buffer, mimetype: "audio/mpeg", fileName: `${title}.mp3` }, { quoted: msg });
         }
-
         fs.unlink(filePath, () => {});
     } catch (err) {
         console.log("❌ YT download error:", err.message);
         if (isOwner(msg, config)) {
-            await sock.sendMessage(from, {
-                text: `❌ Download failed: ${err.message}`,
-            });
+            await sock.sendMessage(from, { text: `❌ Download failed: ${err.message}` });
         } else {
             await sock.sendMessage(from, { text: "❌ Sorry, couldn't download that right now. Please try again later." });
         }
@@ -123,10 +100,6 @@ async function downloadYt(sock, { from, msg, target, label, wantsVideo, config }
 }
 
 const allCommands = [
-
-    // ---------------------------------------
-    // .ping - check if bot is alive
-    // ---------------------------------------
     {
         name: "ping",
         aliases: ["p"],
@@ -138,10 +111,6 @@ const allCommands = [
             await sock.sendMessage(from, { text: `🏓 Pong! ${latency}ms` });
         },
     },
-
-    // ---------------------------------------
-    // .help / .menu - styled command menu
-    // ---------------------------------------
     {
         name: "help",
         aliases: ["menu"],
@@ -196,22 +165,16 @@ const allCommands = [
             }
         },
     },
-
-    // ---------------------------------------
-    // .tts - text to speech
-    // ---------------------------------------
     {
         name: "tts",
         aliases: ["speak"],
         description: "Convert text to voice. Usage: .tts <text>",
         async execute(sock, { from, args, msg }) {
             const text = args.join(" ");
-
             if (!text) {
                 await sock.sendMessage(from, { text: "❓ Please provide text. Example: *.tts Hello world*" });
                 return;
             }
-
             const { spawn } = require("child_process");
             const os = require("os");
             const jobId = `tts_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
@@ -220,35 +183,22 @@ const allCommands = [
 
             try {
                 const chunks = text.match(/.{1,180}(?:\s|$)/g)?.map((s) => s.trim()).filter(Boolean) || [text];
-
                 for (let i = 0; i < chunks.length; i++) {
-                    const url = `https://translate.google.com/translate_tts?ie=UTF-8&tl=en&client=tw-ob&q=${encodeURIComponent(
-                        chunks[i]
-                    )}`;
+                    const url = `https://translate.google.com/translate_tts?ie=UTF-8&tl=en&client=tw-ob&q=${encodeURIComponent(chunks[i])}`;
                     const response = await fetch(url, {
                         headers: {
-                            "User-Agent":
-                                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
                             Referer: "https://translate.google.com/",
                         },
                     });
-
                     if (!response.ok || !response.headers.get("content-type")?.includes("audio")) {
-                        const bodyPreview = await response.text().catch(() => "");
-                        console.log(
-                            `❌ TTS upstream error | status: ${response.status} | content-type: ${response.headers.get(
-                                "content-type"
-                            )} | body: ${bodyPreview.slice(0, 300)}`
-                        );
-                        throw new Error(`TTS service did not return valid audio (status ${response.status}). Please try again.`);
+                        throw new Error(`TTS service did not return valid audio (status ${response.status}).`);
                     }
-
                     const buf = Buffer.from(await response.arrayBuffer());
                     const chunkPath = path.join(tmpDir, `${jobId}_${i}.mp3`);
                     fs.writeFileSync(chunkPath, buf);
                     chunkPaths.push(chunkPath);
                 }
-
                 const mergedPath = path.join(tmpDir, `${jobId}_merged.mp3`);
                 const listPath = path.join(tmpDir, `${jobId}_list.txt`);
                 fs.writeFileSync(listPath, chunkPaths.map((p) => `file '${p}'`).join("\n"));
@@ -257,8 +207,8 @@ const allCommands = [
                     const proc = spawn("ffmpeg", ["-y", "-f", "concat", "-safe", "0", "-i", listPath, "-c", "copy", mergedPath]);
                     let stderr = "";
                     proc.stderr.on("data", (d) => (stderr += d.toString()));
-                    proc.on("error", (err) => reject(new Error(`ffmpeg not found or failed: ${err.message}`)));
-                    proc.on("close", (code) => (code === 0 ? resolve() : reject(new Error(stderr.slice(-300) || `ffmpeg exited ${code}`))));
+                    proc.on("error", (err) => reject(new Error(`ffmpeg failed: ${err.message}`)));
+                    proc.on("close", (code) => (code === 0 ? resolve() : reject(new Error(stderr.slice(-300)))));
                 });
 
                 const outPath = path.join(tmpDir, `${jobId}.ogg`);
@@ -266,27 +216,19 @@ const allCommands = [
                     const proc = spawn("ffmpeg", ["-y", "-i", mergedPath, "-c:a", "libopus", "-ar", "48000", "-ac", "1", outPath]);
                     let stderr = "";
                     proc.stderr.on("data", (d) => (stderr += d.toString()));
-                    proc.on("error", (err) => reject(new Error(`ffmpeg not found or failed: ${err.message}`)));
-                    proc.on("close", (code) => (code === 0 ? resolve() : reject(new Error(stderr.slice(-300) || `ffmpeg exited ${code}`))));
+                    proc.on("error", (err) => reject(new Error(`ffmpeg failed: ${err.message}`)));
+                    proc.on("close", (code) => (code === 0 ? resolve() : reject(new Error(stderr.slice(-300)))));
                 });
 
                 const oggBuffer = fs.readFileSync(outPath);
                 [...chunkPaths, mergedPath, listPath, outPath].forEach((p) => fs.unlink(p, () => {}));
 
-                await sock.sendMessage(
-                    from,
-                    { audio: oggBuffer, mimetype: "audio/ogg; codecs=opus", ptt: true },
-                    { quoted: msg }
-                );
+                await sock.sendMessage(from, { audio: oggBuffer, mimetype: "audio/ogg; codecs=opus", ptt: true }, { quoted: msg });
             } catch (err) {
                 await sock.sendMessage(from, { text: `❌ TTS failed: ${err.message}` });
             }
         },
     },
-
-    // ---------------------------------------
-    // .alive - check bot status with uptime
-    // ---------------------------------------
     {
         name: "alive",
         aliases: [],
@@ -300,10 +242,6 @@ const allCommands = [
             });
         },
     },
-
-    // ---------------------------------------
-    // .owner - show owner contact
-    // ---------------------------------------
     {
         name: "owner",
         aliases: [],
@@ -315,10 +253,6 @@ const allCommands = [
             });
         },
     },
-
-    // ---------------------------------------
-    // .repo - show GitHub repository link
-    // ---------------------------------------
     {
         name: "repo",
         aliases: ["github", "sc", "script"],
@@ -329,10 +263,6 @@ const allCommands = [
             });
         },
     },
-
-    // ---------------------------------------
-    // .goodbye - manual goodbye trigger / info
-    // ---------------------------------------
     {
         name: "goodbye",
         aliases: [],
@@ -349,10 +279,6 @@ const allCommands = [
             await sock.sendMessage(from, { text: `✅ Goodbye messages are now *${choice.toUpperCase()}*.` });
         },
     },
-
-    // ---------------------------------------
-    // .mode - public/private toggle
-    // ---------------------------------------
     {
         name: "mode",
         aliases: [],
@@ -373,14 +299,10 @@ const allCommands = [
             await sock.sendMessage(from, { text: `✅ Bot mode set to *${choice}*.` });
         },
     },
-
-    // ---------------------------------------
-    // .autoread - toggle auto-reading messages
-    // ---------------------------------------
     {
         name: "autoread",
         aliases: [],
-        description: "Toggle auto-read for all messages. Usage: .autoread on/off",
+        description: "Toggle auto-read for all messages",
         async execute(sock, { from, args, config, msg }) {
             if (!isOwner(msg, config)) {
                 await sock.sendMessage(from, { text: "❌ Only the owner can use this command." });
@@ -397,10 +319,6 @@ const allCommands = [
             await sock.sendMessage(from, { text: `✅ Auto-read is now *${choice.toUpperCase()}*.` });
         },
     },
-
-    // ---------------------------------------
-    // .ban / .unban / .banlist - simple ban system
-    // ---------------------------------------
     {
         name: "ban",
         aliases: [],
@@ -457,10 +375,6 @@ const allCommands = [
             await sock.sendMessage(from, { text: `🚫 Banned users:\n${list}` });
         },
     },
-
-    // ---------------------------------------
-    // .sudo / .delsudo / .listsudo
-    // ---------------------------------------
     {
         name: "sudo",
         aliases: [],
@@ -513,10 +427,6 @@ const allCommands = [
             await sock.sendMessage(from, { text: `👤 Sudo users:\n${list}` });
         },
     },
-
-    // ---------------------------------------
-    // .antilink
-    // ---------------------------------------
     {
         name: "antilink",
         aliases: [],
@@ -537,10 +447,6 @@ const allCommands = [
             await sock.sendMessage(from, { text: `✅ Anti-link is now *${choice.toUpperCase()}* for this group.` });
         },
     },
-
-    // ---------------------------------------
-    // .settings
-    // ---------------------------------------
     {
         name: "settings",
         aliases: [],
@@ -556,10 +462,6 @@ const allCommands = [
             await sock.sendMessage(from, { text });
         },
     },
-
-    // ---------------------------------------
-    // .block / .unblock
-    // ---------------------------------------
     {
         name: "block",
         aliases: [],
@@ -598,10 +500,6 @@ const allCommands = [
             await sock.sendMessage(from, { text: `✅ Unblocked: ${target.split("@")[0]}` });
         },
     },
-
-    // ---------------------------------------
-    // .tiktok
-    // ---------------------------------------
     {
         name: "tiktok",
         aliases: ["tt"],
@@ -624,10 +522,6 @@ const allCommands = [
             }
         },
     },
-
-    // ---------------------------------------
-    // Simple configuration setters
-    // ---------------------------------------
     {
         name: "prefix",
         aliases: [],
@@ -723,8 +617,6 @@ const allCommands = [
             await sock.sendMessage(from, { text: `✅ Goodbye message updated.` });
         },
     },
-
-    // Toggles
     {
         name: "antidelete",
         aliases: [],
@@ -845,17 +737,12 @@ const allCommands = [
             await sock.sendMessage(from, { text: `✅ Status auto-like is now *${choice.toUpperCase()}*.` });
         },
     },
-
-    // ---------------------------------------
-    // .ai / .gpt / .ask - ChatGPT (OpenAI) Chatbot
-    // ---------------------------------------
     {
         name: "ai",
         aliases: ["gemini", "gpt", "ask"],
         description: "Ask the AI a question. Usage: .ai <your question>",
         async execute(sock, { from, args, config, msg }) {
             const question = args.join(" ");
-
             if (!question) {
                 await sock.sendMessage(from, {
                     text: `❓ Please ask something. Example: *${config.PREFIX || "."}ai What is the capital of Pakistan?*`,
@@ -864,17 +751,8 @@ const allCommands = [
             }
 
             const apiKey = config.OPENAI_API_KEY || process.env.OPENAI_API_KEY;
-
             if (!apiKey) {
-                if (isOwner(msg, config)) {
-                    await sock.sendMessage(from, {
-                        text: "⚠️ OpenAI API key not set. Please add it to config.env as OPENAI_API_KEY=sk-...",
-                    });
-                } else {
-                    await sock.sendMessage(from, {
-                        text: "🤖 Sorry, AI feature is currently unavailable. Please try again later.",
-                    });
-                }
+                await sock.sendMessage(from, { text: "⚠️ OpenAI API key not set in config." });
                 return;
             }
 
@@ -888,7 +766,7 @@ const allCommands = [
                         "Authorization": `Bearer ${apiKey}`
                     },
                     body: JSON.stringify({
-                        model: "gpt-3.5-turbo",
+                        model: "gpt-4o-mini",
                         messages: [
                             { role: "system", content: config.AI_PERSONA || "You are a helpful assistant." },
                             { role: "user", content: question }
@@ -896,30 +774,22 @@ const allCommands = [
                     })
                 });
 
+                const data = await response.json();
                 if (!response.ok) {
-                    throw new Error(`OpenAI API Error (${response.status})`);
+                    throw new Error(data.error?.message || `OpenAI API Error (${response.status})`);
                 }
 
-                const data = await response.json();
                 const answer = data.choices?.[0]?.message?.content || "Sorry, I couldn't generate a response.";
                 await sock.sendMessage(from, { text: `🤖 ${answer}` });
             } catch (err) {
-                if (isOwner(msg, config)) {
-                    await sock.sendMessage(from, { text: `❌ AI error: ${err.message}` });
-                } else {
-                    await sock.sendMessage(from, { text: "🤖 Sorry, something went wrong. Please try again later." });
-                }
+                await sock.sendMessage(from, { text: `❌ AI error: ${err.message}` });
             }
         },
     },
-
-    // ---------------------------------------
-    // .yt / .youtube - media downloader via yt-dlp
-    // ---------------------------------------
     {
         name: "yt",
         aliases: ["youtube", "ytmp3", "ytmp4"],
-        description: "Download YouTube audio/video. Usage: .yt <link OR song name>",
+        description: "Download YouTube audio/video",
         async execute(sock, { from, args, text, msg, config }) {
             const explicitVideo = /\bvideo\b/i.test(text) || text.includes("ytmp4");
             const explicitAudio = /\baudio\b/i.test(text) || text.includes("ytmp3");
@@ -928,7 +798,7 @@ const allCommands = [
 
             if (!directUrl && cleanArgs.length === 0) {
                 await sock.sendMessage(from, {
-                    text: "❌ Please provide a YouTube link or a song/video name.\nExample: *.yt Attention Charlie Puth*\nOr: *.yt https://youtu.be/xxxx*",
+                    text: "❌ Please provide a YouTube link or a song/video name.\nExample: *.yt Attention Charlie Puth*",
                 });
                 return;
             }
@@ -952,10 +822,6 @@ const allCommands = [
             }, { quoted: msg });
         },
     },
-
-    // ---------------------------------------
-    // .welcome on/off
-    // ---------------------------------------
     {
         name: "welcome",
         aliases: [],
@@ -969,15 +835,9 @@ const allCommands = [
                 return;
             }
             config.WELCOME = choice === "on" ? "true" : "false";
-            await sock.sendMessage(from, {
-                text: `✅ Welcome/goodbye messages are now *${choice.toUpperCase()}*.`,
-            });
+            await sock.sendMessage(from, { text: `✅ Welcome/goodbye messages are now *${choice.toUpperCase()}*.` });
         },
     },
-
-    // ---------------------------------------
-    // .sticker / .s
-    // ---------------------------------------
     {
         name: "sticker",
         aliases: ["s", "stiker"],
@@ -988,9 +848,7 @@ const allCommands = [
             const hasImage = targetMsg.message?.imageMessage;
 
             if (!hasImage) {
-                await sock.sendMessage(from, {
-                    text: "❌ Please send an image with caption *.sticker*, or reply to an image with *.sticker*.",
-                });
+                await sock.sendMessage(from, { text: "❌ Please send or reply to an image with *.sticker*." });
                 return;
             }
 
@@ -1006,7 +864,6 @@ const allCommands = [
             }
         },
     },
-
 ];
 
 module.exports = allCommands;
