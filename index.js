@@ -57,9 +57,35 @@ for (const command of commandList) {
 console.log(`✅ Loaded ${commandList.length} command(s), ${commands.size} total with aliases.`);
 
 // ============================================
+// Restore session from SESSION_ID env var (for server deployments like Render)
+// If a SESSION_ID is provided and no local session/creds.json exists yet,
+// decode it and write it into the session folder so useMultiFileAuthState
+// picks it up automatically — no interactive pairing needed.
+// ============================================
+function restoreSessionFromEnv() {
+    const credsPath = path.join(SESSION_FOLDER, "creds.json");
+    if (fs.existsSync(credsPath)) return; // already have a session on disk
+
+    const sessionId = config.SESSION_ID || process.env.SESSION_ID;
+    if (!sessionId) return;
+
+    try {
+        if (!fs.existsSync(SESSION_FOLDER)) fs.mkdirSync(SESSION_FOLDER, { recursive: true });
+        const decoded = Buffer.from(sessionId.trim(), "base64").toString("utf-8");
+        JSON.parse(decoded); // validate it's proper JSON before writing
+        fs.writeFileSync(credsPath, decoded);
+        console.log("✅ Session restored from SESSION_ID.");
+    } catch (err) {
+        console.log("❌ Failed to restore session from SESSION_ID:", err.message);
+    }
+}
+
+// ============================================
 // Start WhatsApp Connection
 // ============================================
 async function startBot() {
+    restoreSessionFromEnv();
+
     const { state, saveCreds } = await useMultiFileAuthState(SESSION_FOLDER);
     const { version } = await fetchLatestBaileysVersion();
 
@@ -71,6 +97,16 @@ async function startBot() {
     });
 
     if (!sock.authState.creds.registered) {
+        if (!process.stdin.isTTY) {
+            // Running on a server with no interactive terminal (e.g. Render) and
+            // no valid SESSION_ID was available — don't hang forever waiting for input.
+            console.log(
+                "❌ No valid session found and no interactive terminal available.\n" +
+                "Set a SESSION_ID environment variable (from your pairing site) and restart."
+            );
+            process.exit(1);
+        }
+
         const phoneNumber = await question(
             "Apna WhatsApp number likhein (country code ke sath, e.g. 923001234567): "
         );
@@ -253,5 +289,18 @@ async function startBot() {
 
     return sock;
 }
+
+// ============================================
+// Minimal HTTP server for platforms (e.g. Render Web Service) that require
+// the app to bind to a port and respond to health checks. Harmless locally.
+// ============================================
+const http = require("http");
+const PORT = process.env.PORT || 9090;
+http.createServer((req, res) => {
+    res.writeHead(200, { "Content-Type": "text/plain" });
+    res.end("Tasmee-Ai-Bot is running.");
+}).listen(PORT, () => {
+    console.log(`🌐 Health-check server listening on port ${PORT}`);
+});
 
 startBot();
