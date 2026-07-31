@@ -5,11 +5,14 @@ WORKDIR /app
 
 # Install system dependencies:
 # - python3 + curl: needed to install yt-dlp
-# - ffmpeg: not required (we use combined pre-merged formats), kept out to stay lightweight
+# - ffmpeg: REQUIRED so yt-dlp can actually convert audio to real .mp3
+#   (without it, "bestaudio" downloads raw webm/opus which WhatsApp mobile
+#   rejects even if we just rename it to .mp3)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     curl \
     git \
+    ffmpeg \
     ca-certificates \
     && curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp \
     && chmod a+rx /usr/local/bin/yt-dlp \
