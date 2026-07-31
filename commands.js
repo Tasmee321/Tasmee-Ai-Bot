@@ -69,10 +69,10 @@ async function downloadYt(sock, { from, msg, target, label, wantsVideo, config }
 
     const runYtDlp = () =>
         new Promise((resolve, reject) => {
-            // Yahan env aur shell pass kiya hai taake yt-dlp ko Node.js mil sake
+            // shell: true hata diya — args array direct spawn ko diya jata hai,
+            // isliye format string ke andar [ ] jaise characters shell se conflict nahi karte
             const proc = spawn("/usr/local/bin/yt-dlp", ytdlpArgs, {
                 env: process.env,
-                shell: true
             });
             let stderr = "";
             proc.stderr.on("data", (d) => (stderr += d.toString()));
