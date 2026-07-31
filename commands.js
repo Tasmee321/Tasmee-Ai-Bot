@@ -8,6 +8,7 @@ const sharp = require("sharp");
 const fs = require("fs");
 const path = require("path");
 const memory = require("./lib/memory");
+const groq = require("./lib/groq");
 
 const fetch = global.fetch;
 
@@ -544,22 +545,14 @@ async function runAiTool(sock, { from, msg, config }, toolName, toolArgs) {
 // WhatsApp message directly), then asks the model for one short natural
 // closing reply. Returns that closing reply string, or a plain answer
 // string if no tool was called, or null on failure.
-async function chatWithTools(sock, { from, msg, config, apiKey, systemPrompt, history, question }) {
-    const groqUrl = "https://api.groq.com/openai/v1/chat/completions";
-    const headers = { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` };
+async function chatWithTools(sock, { from, msg, config, systemPrompt, history, question }) {
     const baseMessages = [
         { role: "system", content: systemPrompt },
         ...history,
         { role: "user", content: question },
     ];
 
-    const firstRes = await fetch(groqUrl, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ model: "llama-3.3-70b-versatile", messages: baseMessages, tools: AI_TOOLS, tool_choice: "auto" }),
-    });
-    const firstData = await firstRes.json();
-    if (!firstRes.ok) throw new Error(firstData.error?.message || `Groq API Error (${firstRes.status})`);
+    const firstData = await groq.groqChat({ model: "llama-3.3-70b-versatile", messages: baseMessages, tools: AI_TOOLS, tool_choice: "auto" });
 
     const choiceMsg = firstData.choices?.[0]?.message;
     const toolCalls = choiceMsg?.tool_calls;
@@ -576,15 +569,10 @@ async function chatWithTools(sock, { from, msg, config, apiKey, systemPrompt, hi
         toolResultMessages.push({ tool_call_id: call.id, role: "tool", name: call.function.name, content: resultText });
     }
 
-    const followRes = await fetch(groqUrl, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-            model: "llama-3.3-70b-versatile",
-            messages: [...baseMessages, choiceMsg, ...toolResultMessages],
-        }),
+    const followData = await groq.groqChat({
+        model: "llama-3.3-70b-versatile",
+        messages: [...baseMessages, choiceMsg, ...toolResultMessages],
     });
-    const followData = await followRes.json();
     return followData.choices?.[0]?.message?.content || "✅ Ho gaya!";
 }
 
@@ -1205,8 +1193,7 @@ const allCommands = [
                 return;
             }
 
-            const apiKey = config.OPENAI_API_KEY || process.env.OPENAI_API_KEY;
-            if (!apiKey) {
+            if (groq.getKeys().length === 0) {
                 await sock.sendMessage(from, { text: "⚠️ API key not set in config." });
                 return;
             }
@@ -1218,7 +1205,7 @@ const allCommands = [
                 let systemPrompt = await buildSystemPrompt(config.AI_PERSONA, question);
                 if (name) systemPrompt += `\n\nThe user's name in this chat is "${name}" — you were told this earlier, use it naturally when it fits.`;
 
-                const answer = await chatWithTools(sock, { from, msg, config, apiKey, systemPrompt, history, question });
+                const answer = await chatWithTools(sock, { from, msg, config, systemPrompt, history, question });
                 if (!answer) throw new Error("Sorry, I couldn't generate a response.");
 
                 await sock.sendMessage(from, { text: `🤖 ${answer}` });
@@ -1527,8 +1514,7 @@ const allCommands = [
                 return;
             }
 
-            const apiKey = config.OPENAI_API_KEY || process.env.OPENAI_API_KEY;
-            if (!apiKey) {
+            if (groq.getKeys().length === 0) {
                 const list = results.map((r, i) => `${i + 1}. *${r.title}*\n${r.snippet}\n${r.url}`).join("\n\n");
                 await sock.sendMessage(from, { text: `🔎 *Results:*\n\n${list}` }, { quoted: msg });
                 return;
@@ -1538,18 +1524,13 @@ const allCommands = [
                 const context = results.map((r, i) => `[${i + 1}] ${r.title} — ${r.snippet} (${r.url})`).join("\n");
                 const systemPrompt =
                     `Aaj ki tareekh: ${getPakistanDateTimeString()}. Neeche live web search results diye gaye hain — inhe apne alfaz mein use karke, Roman Urdu mein, seedha aur mukhtasar jawab dein. Aakhir mein 1-2 source links bhi de dein.\n\n${context}`;
-                const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
-                    body: JSON.stringify({
-                        model: "llama-3.3-70b-versatile",
-                        messages: [
-                            { role: "system", content: systemPrompt },
-                            { role: "user", content: query },
-                        ],
-                    }),
+                const data = await groq.groqChat({
+                    model: "llama-3.3-70b-versatile",
+                    messages: [
+                        { role: "system", content: systemPrompt },
+                        { role: "user", content: query },
+                    ],
                 });
-                const data = await response.json();
                 const answer = data.choices?.[0]?.message?.content;
                 if (answer) {
                     await sock.sendMessage(from, { text: `🔎 ${answer}` }, { quoted: msg });
