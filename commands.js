@@ -219,11 +219,6 @@ const allCommands = [
             const chunkPaths = [];
 
             try {
-                // NOTE: StreamElements' free speech endpoint now requires an API
-                // key (started returning 401 "No API key was found"), so it's
-                // been replaced with Google Translate's TTS endpoint, which is
-                // still free/keyless. It caps each request at ~200 chars, so we
-                // split long text into chunks and stitch the audio back together.
                 const chunks = text.match(/.{1,180}(?:\s|$)/g)?.map((s) => s.trim()).filter(Boolean) || [text];
 
                 for (let i = 0; i < chunks.length; i++) {
@@ -254,7 +249,6 @@ const allCommands = [
                     chunkPaths.push(chunkPath);
                 }
 
-                // Stitch chunks into one mp3 (no-op copy if there's only one).
                 const mergedPath = path.join(tmpDir, `${jobId}_merged.mp3`);
                 const listPath = path.join(tmpDir, `${jobId}_list.txt`);
                 fs.writeFileSync(listPath, chunkPaths.map((p) => `file '${p}'`).join("\n"));
@@ -267,10 +261,6 @@ const allCommands = [
                     proc.on("close", (code) => (code === 0 ? resolve() : reject(new Error(stderr.slice(-300) || `ffmpeg exited ${code}`))));
                 });
 
-                // Convert real mp3 -> real ogg/opus (proper WhatsApp voice-note
-                // format) instead of sending raw mp3 bytes labeled as a voice
-                // note. This is the same class of bug as the .yt audio issue:
-                // WhatsApp mobile checks the actual codec, not just the flag/mimetype.
                 const outPath = path.join(tmpDir, `${jobId}.ogg`);
                 await new Promise((resolve, reject) => {
                     const proc = spawn("ffmpeg", ["-y", "-i", mergedPath, "-c:a", "libopus", "-ar", "48000", "-ac", "1", outPath]);
@@ -342,12 +332,11 @@ const allCommands = [
 
     // ---------------------------------------
     // .goodbye - manual goodbye trigger / info
-    // (auto goodbye is handled by group-participants.update in index.js)
     // ---------------------------------------
     {
         name: "goodbye",
         aliases: [],
-        description: "Turn goodbye messages on/off (same toggle as .welcome)",
+        description: "Turn goodbye messages on/off",
         async execute(sock, { from, args, config }) {
             const choice = args[0]?.toLowerCase();
             if (choice !== "on" && choice !== "off") {
@@ -410,12 +399,12 @@ const allCommands = [
     },
 
     // ---------------------------------------
-    // .ban / .unban / .banlist - simple ban system (owner only)
+    // .ban / .unban / .banlist - simple ban system
     // ---------------------------------------
     {
         name: "ban",
         aliases: [],
-        description: "Ban a user from using the bot. Reply/mention + .ban",
+        description: "Ban a user from using the bot",
         async execute(sock, { from, args, msg, config }) {
             if (!isOwner(msg, config)) {
                 await sock.sendMessage(from, { text: "❌ Only the owner can use this command." });
@@ -436,7 +425,7 @@ const allCommands = [
     {
         name: "unban",
         aliases: [],
-        description: "Unban a user. Reply/mention + .unban",
+        description: "Unban a user",
         async execute(sock, { from, args, msg, config }) {
             if (!isOwner(msg, config)) {
                 await sock.sendMessage(from, { text: "❌ Only the owner can use this command." });
@@ -470,12 +459,12 @@ const allCommands = [
     },
 
     // ---------------------------------------
-    // .sudo / .delsudo / .listsudo - trusted users who can use owner commands
+    // .sudo / .delsudo / .listsudo
     // ---------------------------------------
     {
         name: "sudo",
         aliases: [],
-        description: "Add a trusted sudo user. Reply/mention + .sudo",
+        description: "Add a trusted sudo user",
         async execute(sock, { from, args, msg, config }) {
             if (!isOwner(msg, config)) {
                 await sock.sendMessage(from, { text: "❌ Only the owner can use this command." });
@@ -526,12 +515,12 @@ const allCommands = [
     },
 
     // ---------------------------------------
-    // .antilink - remove group invite links (group admin feature)
+    // .antilink
     // ---------------------------------------
     {
         name: "antilink",
         aliases: [],
-        description: "Toggle auto-removal of group links. Usage: .antilink on/off (group only)",
+        description: "Toggle auto-removal of group links",
         async execute(sock, { from, args, isGroup, config }) {
             if (!isGroup) {
                 await sock.sendMessage(from, { text: "❌ This command only works in groups." });
@@ -550,7 +539,7 @@ const allCommands = [
     },
 
     // ---------------------------------------
-    // .settings - show all current bot settings
+    // .settings
     // ---------------------------------------
     {
         name: "settings",
@@ -569,12 +558,12 @@ const allCommands = [
     },
 
     // ---------------------------------------
-    // .block / .unblock - block/unblock a user
+    // .block / .unblock
     // ---------------------------------------
     {
         name: "block",
         aliases: [],
-        description: "Block a user. Reply/mention + .block",
+        description: "Block a user",
         async execute(sock, { from, args, msg, config }) {
             if (!isOwner(msg, config)) {
                 await sock.sendMessage(from, { text: "❌ Only the owner can use this command." });
@@ -593,7 +582,7 @@ const allCommands = [
     {
         name: "unblock",
         aliases: [],
-        description: "Unblock a user. Reply/mention + .unblock",
+        description: "Unblock a user",
         async execute(sock, { from, args, msg, config }) {
             if (!isOwner(msg, config)) {
                 await sock.sendMessage(from, { text: "❌ Only the owner can use this command." });
@@ -611,12 +600,12 @@ const allCommands = [
     },
 
     // ---------------------------------------
-    // .tiktok - TikTok video downloader (no watermark)
+    // .tiktok
     // ---------------------------------------
     {
         name: "tiktok",
         aliases: ["tt"],
-        description: "Download a TikTok video. Usage: .tiktok <link>",
+        description: "Download a TikTok video",
         async execute(sock, { from, args, msg }) {
             const url = args[0];
             if (!url || !url.includes("tiktok.com")) {
@@ -631,20 +620,18 @@ const allCommands = [
                 if (!videoUrl) throw new Error("Could not fetch video.");
                 await sock.sendMessage(from, { video: { url: videoUrl }, caption: "🎵 TikTok" }, { quoted: msg });
             } catch (err) {
-                await sock.sendMessage(from, { text: `❌ Failed: ${err.message}\n\n(Note: free TikTok APIs can be unreliable and may stop working without notice.)` });
+                await sock.sendMessage(from, { text: `❌ Failed: ${err.message}` });
             }
         },
     },
 
     // ---------------------------------------
-    // Simple settings-setter commands
-    // Each updates one field in the running config
-    // (For permanent changes, also update config.js directly)
+    // Simple configuration setters
     // ---------------------------------------
     {
         name: "prefix",
         aliases: [],
-        description: "Change command prefix. Usage: .prefix <symbol>",
+        description: "Change command prefix",
         async execute(sock, { from, args, config, msg }) {
             if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             if (!args[0]) return sock.sendMessage(from, { text: `Current prefix: *${config.PREFIX}*` });
@@ -655,7 +642,7 @@ const allCommands = [
     {
         name: "botname",
         aliases: [],
-        description: "Change bot name. Usage: .botname <name>",
+        description: "Change bot name",
         async execute(sock, { from, args, config, msg }) {
             if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const name = args.join(" ");
@@ -667,7 +654,7 @@ const allCommands = [
     {
         name: "ownername",
         aliases: [],
-        description: "Change owner name. Usage: .ownername <name>",
+        description: "Change owner name",
         async execute(sock, { from, args, config, msg }) {
             if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const name = args.join(" ");
@@ -679,7 +666,7 @@ const allCommands = [
     {
         name: "ownernumber",
         aliases: [],
-        description: "Change owner number. Usage: .ownernumber <number>",
+        description: "Change owner number",
         async execute(sock, { from, args, config, msg }) {
             if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const number = args[0]?.replace(/[^0-9]/g, "");
@@ -691,7 +678,7 @@ const allCommands = [
     {
         name: "description",
         aliases: [],
-        description: "Change bot description. Usage: .description <text>",
+        description: "Change bot description",
         async execute(sock, { from, args, config, msg }) {
             if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const desc = args.join(" ");
@@ -703,7 +690,7 @@ const allCommands = [
     {
         name: "stickername",
         aliases: [],
-        description: "Change sticker pack name. Usage: .stickername <name>",
+        description: "Change sticker pack name",
         async execute(sock, { from, args, config, msg }) {
             if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const name = args.join(" ");
@@ -715,11 +702,11 @@ const allCommands = [
     {
         name: "setwelcome",
         aliases: [],
-        description: "Set a custom welcome message. Usage: .setwelcome <text with {name} and {group}>",
+        description: "Set welcome message",
         async execute(sock, { from, args, config, msg }) {
             if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const text = args.join(" ");
-            if (!text) return sock.sendMessage(from, { text: `Current: *${config.WELCOME_MSG || "(default)"}*\n\nUsage: .setwelcome Welcome {name} to {group}!` });
+            if (!text) return sock.sendMessage(from, { text: `Current: *${config.WELCOME_MSG || "(default)"}*` });
             config.WELCOME_MSG = text;
             await sock.sendMessage(from, { text: `✅ Welcome message updated.` });
         },
@@ -727,29 +714,25 @@ const allCommands = [
     {
         name: "setgoodbye",
         aliases: [],
-        description: "Set a custom goodbye message. Usage: .setgoodbye <text with {name} and {group}>",
+        description: "Set goodbye message",
         async execute(sock, { from, args, config, msg }) {
             if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const text = args.join(" ");
-            if (!text) return sock.sendMessage(from, { text: `Current: *${config.GOODBYE_MSG || "(default)"}*\n\nUsage: .setgoodbye Bye {name} from {group}!` });
+            if (!text) return sock.sendMessage(from, { text: `Current: *${config.GOODBYE_MSG || "(default)"}*` });
             config.GOODBYE_MSG = text;
             await sock.sendMessage(from, { text: `✅ Goodbye message updated.` });
         },
     },
 
-    // ---------------------------------------
-    // Simple on/off toggle commands (shared pattern)
-    // ---------------------------------------
+    // Toggles
     {
         name: "antidelete",
         aliases: [],
-        description: "Toggle showing deleted messages. Usage: .antidelete on/off",
+        description: "Toggle deleted messages",
         async execute(sock, { from, args, config, msg }) {
             if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const choice = args[0]?.toLowerCase();
-            if (choice !== "on" && choice !== "off") {
-                return sock.sendMessage(from, { text: `Current: *${config.ANTI_DELETE === "true" ? "ON" : "OFF"}*\nUsage: .antidelete on/off` });
-            }
+            if (choice !== "on" && choice !== "off") return sock.sendMessage(from, { text: `Current: *${config.ANTI_DELETE === "true" ? "ON" : "OFF"}*` });
             config.ANTI_DELETE = choice === "on" ? "true" : "false";
             await sock.sendMessage(from, { text: `✅ Anti-delete is now *${choice.toUpperCase()}*.` });
         },
@@ -757,27 +740,23 @@ const allCommands = [
     {
         name: "editpath",
         aliases: ["delpath"],
-        description: "Where deleted/edited messages go. Usage: .editpath same/inbox",
+        description: "Where deleted messages go",
         async execute(sock, { from, args, config, msg }) {
             if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const choice = args[0]?.toLowerCase();
-            if (choice !== "same" && choice !== "inbox") {
-                return sock.sendMessage(from, { text: `Current: *${config.ANTI_DEL_PATH || "inbox"}*\nUsage: .editpath same/inbox` });
-            }
+            if (choice !== "same" && choice !== "inbox") return sock.sendMessage(from, { text: `Current: *${config.ANTI_DEL_PATH || "inbox"}*` });
             config.ANTI_DEL_PATH = choice;
-            await sock.sendMessage(from, { text: `✅ Deleted messages will now go to: *${choice}*` });
+            await sock.sendMessage(from, { text: `✅ Deleted messages go to: *${choice}*` });
         },
     },
     {
         name: "recording",
         aliases: [],
-        description: "Toggle recording indicator. Usage: .recording on/off",
+        description: "Toggle recording indicator",
         async execute(sock, { from, args, config, msg }) {
             if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const choice = args[0]?.toLowerCase();
-            if (choice !== "on" && choice !== "off") {
-                return sock.sendMessage(from, { text: `Current: *${config.AUTO_RECORDING === "true" ? "ON" : "OFF"}*` });
-            }
+            if (choice !== "on" && choice !== "off") return sock.sendMessage(from, { text: `Current: *${config.AUTO_RECORDING === "true" ? "ON" : "OFF"}*` });
             config.AUTO_RECORDING = choice === "on" ? "true" : "false";
             await sock.sendMessage(from, { text: `✅ Recording indicator is now *${choice.toUpperCase()}*.` });
         },
@@ -785,13 +764,11 @@ const allCommands = [
     {
         name: "autotyping",
         aliases: [],
-        description: "Toggle typing indicator. Usage: .autotyping on/off",
+        description: "Toggle typing indicator",
         async execute(sock, { from, args, config, msg }) {
             if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const choice = args[0]?.toLowerCase();
-            if (choice !== "on" && choice !== "off") {
-                return sock.sendMessage(from, { text: `Current: *${config.AUTO_TYPING === "true" ? "ON" : "OFF"}*` });
-            }
+            if (choice !== "on" && choice !== "off") return sock.sendMessage(from, { text: `Current: *${config.AUTO_TYPING === "true" ? "ON" : "OFF"}*` });
             config.AUTO_TYPING = choice === "on" ? "true" : "false";
             await sock.sendMessage(from, { text: `✅ Auto-typing is now *${choice.toUpperCase()}*.` });
         },
@@ -799,27 +776,23 @@ const allCommands = [
     {
         name: "online",
         aliases: [],
-        description: "Toggle always-online mode. Usage: .online on/off",
+        description: "Toggle always-online mode",
         async execute(sock, { from, args, config, msg }) {
             if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const choice = args[0]?.toLowerCase();
-            if (choice !== "on" && choice !== "off") {
-                return sock.sendMessage(from, { text: `Current: *${config.ALWAYS_ONLINE === "true" ? "ON" : "OFF"}*` });
-            }
+            if (choice !== "on" && choice !== "off") return sock.sendMessage(from, { text: `Current: *${config.ALWAYS_ONLINE === "true" ? "ON" : "OFF"}*` });
             config.ALWAYS_ONLINE = choice === "on" ? "true" : "false";
-            await sock.sendMessage(from, { text: `✅ Always-online is now *${choice.toUpperCase()}*.\n(Restart the bot for this to fully take effect)` });
+            await sock.sendMessage(from, { text: `✅ Always-online is now *${choice.toUpperCase()}*.` });
         },
     },
     {
         name: "autoreact",
         aliases: [],
-        description: "Toggle auto-reacting to messages. Usage: .autoreact on/off",
+        description: "Toggle auto-reacting",
         async execute(sock, { from, args, config, msg }) {
             if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const choice = args[0]?.toLowerCase();
-            if (choice !== "on" && choice !== "off") {
-                return sock.sendMessage(from, { text: `Current: *${config.AUTO_REACT === "true" ? "ON" : "OFF"}*` });
-            }
+            if (choice !== "on" && choice !== "off") return sock.sendMessage(from, { text: `Current: *${config.AUTO_REACT === "true" ? "ON" : "OFF"}*` });
             config.AUTO_REACT = choice === "on" ? "true" : "false";
             await sock.sendMessage(from, { text: `✅ Auto-react is now *${choice.toUpperCase()}*.` });
         },
@@ -827,13 +800,11 @@ const allCommands = [
     {
         name: "anticall",
         aliases: [],
-        description: "Toggle rejecting incoming calls. Usage: .anticall on/off",
+        description: "Toggle rejecting incoming calls",
         async execute(sock, { from, args, config, msg }) {
             if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const choice = args[0]?.toLowerCase();
-            if (choice !== "on" && choice !== "off") {
-                return sock.sendMessage(from, { text: `Current: *${config.ANTI_CALL === "true" ? "ON" : "OFF"}*` });
-            }
+            if (choice !== "on" && choice !== "off") return sock.sendMessage(from, { text: `Current: *${config.ANTI_CALL === "true" ? "ON" : "OFF"}*` });
             config.ANTI_CALL = choice === "on" ? "true" : "false";
             await sock.sendMessage(from, { text: `✅ Anti-call is now *${choice.toUpperCase()}*.` });
         },
@@ -841,7 +812,7 @@ const allCommands = [
     {
         name: "anticallmsg",
         aliases: [],
-        description: "Set the message sent to rejected callers. Usage: .anticallmsg <text>",
+        description: "Set rejected call message",
         async execute(sock, { from, args, config, msg }) {
             if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const text = args.join(" ");
@@ -853,34 +824,30 @@ const allCommands = [
     {
         name: "adminaction",
         aliases: [],
-        description: "Toggle promote/demote notifications. Usage: .adminaction on/off",
+        description: "Toggle admin notifications",
         async execute(sock, { from, args, config, msg }) {
             if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const choice = args[0]?.toLowerCase();
-            if (choice !== "on" && choice !== "off") {
-                return sock.sendMessage(from, { text: `Current: *${config.ADMIN_ACTION === "true" ? "ON" : "OFF"}*` });
-            }
+            if (choice !== "on" && choice !== "off") return sock.sendMessage(from, { text: `Current: *${config.ADMIN_ACTION === "true" ? "ON" : "OFF"}*` });
             config.ADMIN_ACTION = choice === "on" ? "true" : "false";
-            await sock.sendMessage(from, { text: `✅ Admin action notifications are now *${choice.toUpperCase()}*.` });
+            await sock.sendMessage(from, { text: `✅ Admin notifications are now *${choice.toUpperCase()}*.` });
         },
     },
     {
         name: "statuslike",
         aliases: [],
-        description: "Toggle auto-liking statuses. Usage: .statuslike on/off",
+        description: "Toggle auto-liking statuses",
         async execute(sock, { from, args, config, msg }) {
             if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const choice = args[0]?.toLowerCase();
-            if (choice !== "on" && choice !== "off") {
-                return sock.sendMessage(from, { text: `Current: *${config.AUTO_STATUS_REACT === "true" ? "ON" : "OFF"}*` });
-            }
+            if (choice !== "on" && choice !== "off") return sock.sendMessage(from, { text: `Current: *${config.AUTO_STATUS_REACT === "true" ? "ON" : "OFF"}*` });
             config.AUTO_STATUS_REACT = choice === "on" ? "true" : "false";
             await sock.sendMessage(from, { text: `✅ Status auto-like is now *${choice.toUpperCase()}*.` });
         },
     },
 
     // ---------------------------------------
-    // .ai / .gemini / .gpt / .ask - AI chatbot
+    // .ai / .gpt / .ask - ChatGPT (OpenAI) Chatbot
     // ---------------------------------------
     {
         name: "ai",
@@ -896,12 +863,12 @@ const allCommands = [
                 return;
             }
 
-            const apiKey = config.GEMINI_API_KEY || process.env.GEMINI_API_KEY;
+            const apiKey = config.OPENAI_API_KEY || process.env.OPENAI_API_KEY;
 
             if (!apiKey) {
                 if (isOwner(msg, config)) {
                     await sock.sendMessage(from, {
-                        text: "⚠️ Gemini API key not set. Get a free key from https://aistudio.google.com/app/apikey and add it to config.js as GEMINI_API_KEY.",
+                        text: "⚠️ OpenAI API key not set. Please add it to config.env as OPENAI_API_KEY=sk-...",
                     });
                 } else {
                     await sock.sendMessage(from, {
@@ -914,25 +881,27 @@ const allCommands = [
             await sock.sendMessage(from, { text: "🤖 Thinking..." });
 
             try {
-                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
-                const controller = new AbortController();
-                setTimeout(() => controller.abort(), 30000);
-                const response = await fetch(url, {
+                const response = await fetch("https://api.openai.com/v1/chat/completions", {
                     method: "POST",
-                    headers: { "Content-Type": "application/json" },
+                    headers: {
+                        "Content-Type": "application/json",
+                        "Authorization": `Bearer ${apiKey}`
+                    },
                     body: JSON.stringify({
-                        system_instruction: { parts: [{ text: config.AI_PERSONA || "" }] },
-                        contents: [{ parts: [{ text: question }] }],
-                    }),
-                    signal: controller.signal,
+                        model: "gpt-3.5-turbo",
+                        messages: [
+                            { role: "system", content: config.AI_PERSONA || "You are a helpful assistant." },
+                            { role: "user", content: question }
+                        ]
+                    })
                 });
+
                 if (!response.ok) {
-                    throw new Error(`Gemini API Error (${response.status})`);
+                    throw new Error(`OpenAI API Error (${response.status})`);
                 }
+
                 const data = await response.json();
-                const answer =
-                    data?.candidates?.[0]?.content?.parts?.[0]?.text ||
-                    "Sorry, I couldn't generate a response. Please try again.";
+                const answer = data.choices?.[0]?.message?.content || "Sorry, I couldn't generate a response.";
                 await sock.sendMessage(from, { text: `🤖 ${answer}` });
             } catch (err) {
                 if (isOwner(msg, config)) {
@@ -944,10 +913,8 @@ const allCommands = [
         },
     },
 
-
     // ---------------------------------------
-    // .yt / .youtube - media downloader (link OR song/video name) via yt-dlp
-    // If audio/video isn't specified, bot asks and waits for your reply.
+    // .yt / .youtube - media downloader via yt-dlp
     // ---------------------------------------
     {
         name: "yt",
@@ -974,10 +941,8 @@ const allCommands = [
                 return;
             }
 
-            // No format specified — ask and wait for a reply
             module.exports.pendingYt.set(from, { target, label });
             setTimeout(() => {
-                // expire the pending request after 60s so it doesn't linger forever
                 const pending = module.exports.pendingYt.get(from);
                 if (pending && pending.target === target) module.exports.pendingYt.delete(from);
             }, 60000);
@@ -988,39 +953,35 @@ const allCommands = [
         },
     },
 
-
     // ---------------------------------------
-    // .welcome on/off - toggle group welcome messages
+    // .welcome on/off
     // ---------------------------------------
     {
         name: "welcome",
         aliases: [],
-        description: "Turn welcome/goodbye messages on or off. Usage: .welcome on/off",
+        description: "Turn welcome/goodbye messages on or off",
         async execute(sock, { from, args, config }) {
             const choice = args[0]?.toLowerCase();
-
             if (choice !== "on" && choice !== "off") {
                 await sock.sendMessage(from, {
                     text: `Current status: *${config.WELCOME === "true" || config.WELCOME === true ? "ON" : "OFF"}*\n\nUsage: *.welcome on* or *.welcome off*`,
                 });
                 return;
             }
-
             config.WELCOME = choice === "on" ? "true" : "false";
-
             await sock.sendMessage(from, {
-                text: `✅ Welcome/goodbye messages are now *${choice.toUpperCase()}*.\n\n(Resets on restart — for a permanent change, update WELCOME in config.js)`,
+                text: `✅ Welcome/goodbye messages are now *${choice.toUpperCase()}*.`,
             });
         },
     },
 
     // ---------------------------------------
-    // .sticker / .s - convert image to sticker
+    // .sticker / .s
     // ---------------------------------------
     {
         name: "sticker",
         aliases: ["s", "stiker"],
-        description: "Convert an image to a sticker (send/reply to an image with .sticker)",
+        description: "Convert an image to a sticker",
         async execute(sock, { from, msg }) {
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
             const targetMsg = quoted ? { message: quoted, key: msg.key } : msg;
@@ -1045,20 +1006,6 @@ const allCommands = [
             }
         },
     },
-
-    // ---------------------------------------
-    // 👉 ADD YOUR NEW COMMANDS BELOW THIS LINE
-    // Copy this template and fill it in:
-    //
-    // {
-    //     name: "commandname",
-    //     aliases: [],
-    //     description: "what it does",
-    //     async execute(sock, { from, args, text, msg, isGroup, config }) {
-    //         await sock.sendMessage(from, { text: "Hello!" });
-    //     },
-    // },
-    // ---------------------------------------
 
 ];
 
