@@ -66,6 +66,15 @@ async function downloadYt(sock, { from, msg, target, label, wantsVideo, config }
         path.join(__dirname, "cookies.txt"), // Path of the cookies file
         "--js-runtimes",
         "bun",
+        ...(wantsVideo
+            ? []
+            : // Actually convert to real mp3 (needs ffmpeg in the image) instead of
+              // just renaming whatever raw audio stream yt-dlp grabbed. WhatsApp's
+              // mobile app validates the real codec, not just the file extension —
+              // a mislabeled webm/opus file plays fine on WhatsApp Web/Desktop
+              // (browser decoder is lenient) but fails on phone ("no longer
+              // available" / resend).
+              ["--extract-audio", "--audio-format", "mp3", "--audio-quality", "0"]),
         target,
     ];
 
