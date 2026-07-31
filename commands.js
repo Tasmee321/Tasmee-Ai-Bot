@@ -7,8 +7,62 @@ const { downloadMediaMessage } = require("@whiskeysockets/baileys");
 const sharp = require("sharp");
 const fs = require("fs");
 const path = require("path");
+const memory = require("./lib/memory");
 
 const fetch = global.fetch;
+
+// Shared TTS engine — turns text into an .ogg/opus voice-note buffer.
+// Used by the .tts command AND by the automatic "reply to voice notes
+// with voice" feature in index.js, so both stay in sync.
+async function synthesizeSpeech(text) {
+    const { spawn } = require("child_process");
+    const os = require("os");
+    const jobId = `tts_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+    const tmpDir = os.tmpdir();
+    const chunkPaths = [];
+
+    const chunks = text.match(/.{1,180}(?:\s|$)/g)?.map((s) => s.trim()).filter(Boolean) || [text];
+    for (let i = 0; i < chunks.length; i++) {
+        const url = `https://translate.google.com/translate_tts?ie=UTF-8&tl=en&client=tw-ob&q=${encodeURIComponent(chunks[i])}`;
+        const response = await fetch(url, {
+            headers: {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+                Referer: "https://translate.google.com/",
+            },
+        });
+        if (!response.ok || !response.headers.get("content-type")?.includes("audio")) {
+            throw new Error(`TTS service did not return valid audio (status ${response.status}).`);
+        }
+        const buf = Buffer.from(await response.arrayBuffer());
+        const chunkPath = path.join(tmpDir, `${jobId}_${i}.mp3`);
+        fs.writeFileSync(chunkPath, buf);
+        chunkPaths.push(chunkPath);
+    }
+    const mergedPath = path.join(tmpDir, `${jobId}_merged.mp3`);
+    const listPath = path.join(tmpDir, `${jobId}_list.txt`);
+    fs.writeFileSync(listPath, chunkPaths.map((p) => `file '${p}'`).join("\n"));
+
+    await new Promise((resolve, reject) => {
+        const proc = spawn("ffmpeg", ["-y", "-f", "concat", "-safe", "0", "-i", listPath, "-c", "copy", mergedPath]);
+        let stderr = "";
+        proc.stderr.on("data", (d) => (stderr += d.toString()));
+        proc.on("error", (err) => reject(new Error(`ffmpeg failed: ${err.message}`)));
+        proc.on("close", (code) => (code === 0 ? resolve() : reject(new Error(stderr.slice(-300)))));
+    });
+
+    const outPath = path.join(tmpDir, `${jobId}.ogg`);
+    await new Promise((resolve, reject) => {
+        const proc = spawn("ffmpeg", ["-y", "-i", mergedPath, "-c:a", "libopus", "-ar", "48000", "-ac", "1", outPath]);
+        let stderr = "";
+        proc.stderr.on("data", (d) => (stderr += d.toString()));
+        proc.on("error", (err) => reject(new Error(`ffmpeg failed: ${err.message}`)));
+        proc.on("close", (code) => (code === 0 ? resolve() : reject(new Error(stderr.slice(-300)))));
+    });
+
+    const oggBuffer = fs.readFileSync(outPath);
+    [...chunkPaths, mergedPath, listPath, outPath].forEach((p) => fs.unlink(p, () => {}));
+    return oggBuffer;
+}
 
 // Shared with index.js: hand out the owner's personal number when someone
 // urgently needs to talk to them directly, or asks for it by name.
@@ -130,7 +184,7 @@ const allCommands = [
             const categories = {
                 "🤖 AI": ["ai"],
                 "📥 DOWNLOAD": ["yt", "tiktok"],
-                "🎨 MEDIA": ["sticker", "tts"],
+                "🎨 MEDIA": ["sticker", "tts", "text"],
                 "👑 OWNER": ["ban", "unban", "banlist", "block", "unblock", "sudo", "delsudo", "listsudo", "mode", "autoread"],
                 "⚙️ SETTINGS": [
                     "welcome", "goodbye", "setwelcome", "setgoodbye", "antilink", "antidelete",
@@ -149,6 +203,7 @@ const allCommands = [
             menu += `◉ 📦 ᴘʀᴇғɪx: ${config.PREFIX || "."}\n`;
             menu += `◉ ⚙️ ᴍᴏᴅᴇ: ${config.MODE || "public"}\n`;
             menu += `◉ 🏷️ ᴠᴇʀsɪᴏɴ: 1.0.0\n`;
+            menu += `◉ 📱 ᴏᴡɴᴇʀ ᴄᴏɴᴛᴀᴄᴛ: ${config.OWNER_NUMBER || "N/A"}\n`;
 
             for (const [category, cmdNames] of Object.entries(categories)) {
                 menu += `━━━━━『 ${category} 』━━━━━\n◉\n`;
@@ -158,6 +213,7 @@ const allCommands = [
                 }
             }
 
+            menu += `\n🤝 Main aapki madad karne ke liye yahan hoon!`;
             menu += `\n©️ ᴘᴏᴡᴇʀᴇᴅ ʙʏ ${config.OWNER_NAME || "Tasmee ul Hasnain"}`;
 
             if (config.MENU_IMAGE_URL) {
@@ -182,54 +238,8 @@ const allCommands = [
                 await sock.sendMessage(from, { text: "❓ Please provide text. Example: *.tts Hello world*" });
                 return;
             }
-            const { spawn } = require("child_process");
-            const os = require("os");
-            const jobId = `tts_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
-            const tmpDir = os.tmpdir();
-            const chunkPaths = [];
-
             try {
-                const chunks = text.match(/.{1,180}(?:\s|$)/g)?.map((s) => s.trim()).filter(Boolean) || [text];
-                for (let i = 0; i < chunks.length; i++) {
-                    const url = `https://translate.google.com/translate_tts?ie=UTF-8&tl=en&client=tw-ob&q=${encodeURIComponent(chunks[i])}`;
-                    const response = await fetch(url, {
-                        headers: {
-                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-                            Referer: "https://translate.google.com/",
-                        },
-                    });
-                    if (!response.ok || !response.headers.get("content-type")?.includes("audio")) {
-                        throw new Error(`TTS service did not return valid audio (status ${response.status}).`);
-                    }
-                    const buf = Buffer.from(await response.arrayBuffer());
-                    const chunkPath = path.join(tmpDir, `${jobId}_${i}.mp3`);
-                    fs.writeFileSync(chunkPath, buf);
-                    chunkPaths.push(chunkPath);
-                }
-                const mergedPath = path.join(tmpDir, `${jobId}_merged.mp3`);
-                const listPath = path.join(tmpDir, `${jobId}_list.txt`);
-                fs.writeFileSync(listPath, chunkPaths.map((p) => `file '${p}'`).join("\n"));
-
-                await new Promise((resolve, reject) => {
-                    const proc = spawn("ffmpeg", ["-y", "-f", "concat", "-safe", "0", "-i", listPath, "-c", "copy", mergedPath]);
-                    let stderr = "";
-                    proc.stderr.on("data", (d) => (stderr += d.toString()));
-                    proc.on("error", (err) => reject(new Error(`ffmpeg failed: ${err.message}`)));
-                    proc.on("close", (code) => (code === 0 ? resolve() : reject(new Error(stderr.slice(-300)))));
-                });
-
-                const outPath = path.join(tmpDir, `${jobId}.ogg`);
-                await new Promise((resolve, reject) => {
-                    const proc = spawn("ffmpeg", ["-y", "-i", mergedPath, "-c:a", "libopus", "-ar", "48000", "-ac", "1", outPath]);
-                    let stderr = "";
-                    proc.stderr.on("data", (d) => (stderr += d.toString()));
-                    proc.on("error", (err) => reject(new Error(`ffmpeg failed: ${err.message}`)));
-                    proc.on("close", (code) => (code === 0 ? resolve() : reject(new Error(stderr.slice(-300)))));
-                });
-
-                const oggBuffer = fs.readFileSync(outPath);
-                [...chunkPaths, mergedPath, listPath, outPath].forEach((p) => fs.unlink(p, () => {}));
-
+                const oggBuffer = await synthesizeSpeech(text);
                 await sock.sendMessage(from, { audio: oggBuffer, mimetype: "audio/ogg; codecs=opus", ptt: true }, { quoted: msg });
             } catch (err) {
                 await sock.sendMessage(from, { text: `❌ TTS failed: ${err.message}` });
@@ -775,6 +785,10 @@ const allCommands = [
             await sock.sendMessage(from, { text: "🤖 Thinking..." });
 
             try {
+                const { name, history } = memory.getContext(from);
+                let systemPrompt = config.AI_PERSONA || "You are a helpful assistant.";
+                if (name) systemPrompt += `\n\nThe user's name in this chat is "${name}" — you were told this earlier, use it naturally when it fits.`;
+
                 const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
                     method: "POST",
                     headers: {
@@ -784,7 +798,8 @@ const allCommands = [
                     body: JSON.stringify({
                         model: "llama-3.3-70b-versatile",
                         messages: [
-                            { role: "system", content: config.AI_PERSONA || "You are a helpful assistant." },
+                            { role: "system", content: systemPrompt },
+                            ...history,
                             { role: "user", content: question }
                         ]
                     })
@@ -797,6 +812,7 @@ const allCommands = [
 
                 const answer = data.choices?.[0]?.message?.content || "Sorry, I couldn't generate a response.";
                 await sock.sendMessage(from, { text: `🤖 ${answer}` });
+                memory.remember(from, question, answer);
             } catch (err) {
                 await sock.sendMessage(from, { text: `❌ AI error: ${err.message}` });
             }
@@ -880,9 +896,90 @@ const allCommands = [
             }
         },
     },
+    {
+        name: "text",
+        aliases: ["stylish", "name"],
+        description: "Turn a name/word into a stylish image. Usage: .text <name>",
+        async execute(sock, { from, args, msg }) {
+            const raw = args.join(" ").trim();
+            if (!raw) {
+                await sock.sendMessage(from, { text: "❓ Please provide a name/word. Example: *.text Shahzad*" });
+                return;
+            }
+            if (raw.length > 24) {
+                await sock.sendMessage(from, { text: "❌ Please keep it under 24 characters for a clean-looking image." });
+                return;
+            }
+
+            // Escape XML special chars so the name can't break the SVG.
+            const safeText = raw
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;");
+
+            // Pick a font size that shrinks for longer names so it still fits.
+            const width = 900;
+            const height = 500;
+            let fontSize = 110;
+            if (raw.length > 8) fontSize = 90;
+            if (raw.length > 12) fontSize = 70;
+            if (raw.length > 18) fontSize = 55;
+
+            // Random-ish but deterministic-per-word gradient pick, so the
+            // same name always looks the same but different names differ.
+            const palettes = [
+                ["#ff6a00", "#ee0979"],
+                ["#00c6ff", "#0072ff"],
+                ["#f7971e", "#ffd200"],
+                ["#8e2de2", "#4a00e0"],
+                ["#11998e", "#38ef7d"],
+                ["#fc466b", "#3f5efb"],
+            ];
+            let seed = 0;
+            for (const ch of raw) seed += ch.charCodeAt(0);
+            const [colorA, colorB] = palettes[seed % palettes.length];
+
+            const svg = `
+<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f0c29"/>
+      <stop offset="50%" stop-color="#302b63"/>
+      <stop offset="100%" stop-color="#24243e"/>
+    </linearGradient>
+    <linearGradient id="textGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="${colorA}"/>
+      <stop offset="100%" stop-color="${colorB}"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="10" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <rect width="${width}" height="${height}" fill="url(#bgGrad)"/>
+  <rect x="20" y="20" width="${width - 40}" height="${height - 40}" fill="none" stroke="url(#textGrad)" stroke-width="4" rx="24"/>
+  <text x="50%" y="52%" font-family="Georgia, 'DejaVu Serif', serif" font-weight="bold" font-size="${fontSize}"
+        fill="url(#textGrad)" stroke="#ffffff" stroke-width="1.5" text-anchor="middle" dominant-baseline="middle"
+        filter="url(#glow)">${safeText}</text>
+  <text x="50%" y="90%" font-family="Arial, sans-serif" font-size="18" fill="#ffffffaa" text-anchor="middle">Tasmee-Ai-Bot</text>
+</svg>`.trim();
+
+            try {
+                const pngBuffer = await sharp(Buffer.from(svg)).png().toBuffer();
+                await sock.sendMessage(from, { image: pngBuffer, caption: `✨ *${raw}*` }, { quoted: msg });
+            } catch (err) {
+                await sock.sendMessage(from, { text: `❌ Couldn't generate the image: ${err.message}` });
+            }
+        },
+    },
 ];
 
 module.exports = allCommands;
 module.exports.pendingYt = new Map();
 module.exports.downloadYt = downloadYt;
 module.exports.isOwner = isOwner;
+module.exports.synthesizeSpeech = synthesizeSpeech;
