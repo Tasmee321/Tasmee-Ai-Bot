@@ -20,6 +20,7 @@ const path = require("path");
 
 const config = require("./config");
 const memory = require("./lib/memory");
+const groq = require("./lib/groq");
 
 const SESSION_FOLDER = "./session";
 const PREFIX = config.PREFIX || ".";
@@ -182,8 +183,8 @@ function restoreSessionFromEnv() {
 // ============================================
 async function getAiReply(text, from, sock, msg) {
     const geminiKey = config.GEMINI_API_KEY || process.env.GEMINI_API_KEY;
-    const groqKey = config.OPENAI_API_KEY || process.env.OPENAI_API_KEY;
-    if (!geminiKey && !groqKey) return null;
+    const hasGroqKey = groq.getKeys().length > 0;
+    if (!geminiKey && !hasGroqKey) return null;
 
     const { name, history } = memory.getContext(from);
     const commandsModule = require("./commands");
@@ -192,14 +193,13 @@ async function getAiReply(text, from, sock, msg) {
 
     let answer = null;
     try {
-        if (groqKey && sock && msg) {
+        if (hasGroqKey && sock && msg) {
             // Groq path: supports tool-calling, so the AI can actually
             // trigger real commands (download, image, weather, etc.).
             answer = await commandsModule.chatWithTools(sock, {
                 from,
                 msg,
                 config,
-                apiKey: groqKey,
                 systemPrompt,
                 history,
                 question: text,
@@ -224,23 +224,15 @@ async function getAiReply(text, from, sock, msg) {
             });
             const data = await response.json();
             answer = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-        } else if (groqKey) {
-            const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    "Authorization": `Bearer ${groqKey}`,
-                },
-                body: JSON.stringify({
-                    model: "llama-3.3-70b-versatile",
-                    messages: [
-                        { role: "system", content: systemPrompt || "You are a helpful assistant." },
-                        ...history,
-                        { role: "user", content: text },
-                    ],
-                }),
+        } else if (hasGroqKey) {
+            const data = await groq.groqChat({
+                model: "llama-3.3-70b-versatile",
+                messages: [
+                    { role: "system", content: systemPrompt || "You are a helpful assistant." },
+                    ...history,
+                    { role: "user", content: text },
+                ],
             });
-            const data = await response.json();
             answer = data.choices?.[0]?.message?.content;
         }
     } catch (err) {
@@ -258,24 +250,15 @@ async function getAiReply(text, from, sock, msg) {
 // Returns the transcribed text, or null if it couldn't be transcribed.
 // ============================================
 async function transcribeVoice(buffer) {
-    const groqKey = config.OPENAI_API_KEY || process.env.OPENAI_API_KEY;
-    if (!groqKey) return null;
+    if (groq.getKeys().length === 0) return null;
 
     try {
-        const form = new FormData();
-        form.append("file", new Blob([buffer], { type: "audio/ogg" }), "voice.ogg");
-        form.append("model", "whisper-large-v3-turbo");
-
-        const response = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
-            method: "POST",
-            headers: { "Authorization": `Bearer ${groqKey}` },
-            body: form,
+        const data = await groq.groqTranscribe(() => {
+            const form = new FormData();
+            form.append("file", new Blob([buffer], { type: "audio/ogg" }), "voice.ogg");
+            form.append("model", "whisper-large-v3-turbo");
+            return form;
         });
-        const data = await response.json();
-        if (!response.ok) {
-            console.log("Transcription error:", data?.error?.message || response.status);
-            return null;
-        }
         return data?.text?.trim() || null;
     } catch (err) {
         console.log("Transcription error:", err.message);
