@@ -69,7 +69,11 @@ async function downloadYt(sock, { from, msg, target, label, wantsVideo, config }
 
     const runYtDlp = () =>
         new Promise((resolve, reject) => {
-            const proc = spawn("/usr/local/bin/yt-dlp", ytdlpArgs);
+            // Yahan env aur shell pass kiya hai taake yt-dlp ko Node.js mil sake
+            const proc = spawn("/usr/local/bin/yt-dlp", ytdlpArgs, {
+                env: process.env,
+                shell: true
+            });
             let stderr = "";
             proc.stderr.on("data", (d) => (stderr += d.toString()));
             proc.on("error", (err) => reject(new Error(`yt-dlp not found or failed to start: ${err.message}`)));
