@@ -86,6 +86,7 @@ async function downloadYt(sock, { from, msg, target, label, wantsVideo, config }
 
         fs.unlink(filePath, () => {});
     } catch (err) {
+        console.log("❌ YT download error:", err.message);
         if (isOwner(msg, config)) {
             await sock.sendMessage(from, {
                 text: `❌ Download failed: ${err.message}`,
