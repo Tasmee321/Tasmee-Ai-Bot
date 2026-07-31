@@ -64,6 +64,8 @@ async function downloadYt(sock, { from, msg, target, label, wantsVideo, config }
         "youtube:player_client=android",
         "--geo-bypass",
         "--no-check-certificates",
+        "--cookies", // Is line ko command arguments mein add karna zaroori tha 
+        path.join(__dirname, "cookies.txt"), // Path of the cookies file
         target,
     ];
 
