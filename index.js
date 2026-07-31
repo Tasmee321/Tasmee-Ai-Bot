@@ -32,6 +32,9 @@ function rememberMessage(key, content) {
     }
 }
 
+// Tracks which chats have already been shown the "this is an AI" disclaimer
+const chatbotIntroduced = new Set();
+
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 const question = (text) => new Promise((resolve) => rl.question(text, resolve));
 
@@ -206,7 +209,64 @@ async function startBot() {
             msg.message.videoMessage?.caption ||
             "";
 
-        if (!text.startsWith(PREFIX)) return;
+        if (!text.startsWith(PREFIX)) {
+            // Check if this is a reply to a pending "audio or video?" question
+            const pending = commandList.pendingYt?.get(from);
+            const choice = text.trim().toLowerCase();
+            if (pending && (choice === "audio" || choice === "video")) {
+                commandList.pendingYt.delete(from);
+                await commandList.downloadYt(sock, {
+                    from,
+                    msg,
+                    target: pending.target,
+                    label: pending.label,
+                    wantsVideo: choice === "video",
+                    config,
+                });
+                return;
+            }
+
+            // AI auto-chat: reply like an assistant to private messages only
+            // (not groups, not your own outgoing messages, not empty text)
+            if (
+                !isGroup &&
+                !msg.key.fromMe &&
+                text.trim() &&
+                (config.CHATBOT === "on" || config.CHATBOT === "true" || config.CHATBOT === true)
+            ) {
+                const apiKey = config.GEMINI_API_KEY || process.env.GEMINI_API_KEY;
+                if (apiKey) {
+                    try {
+                        if (!chatbotIntroduced.has(from)) {
+                            chatbotIntroduced.add(from);
+                            await sock.sendMessage(from, {
+                                text: `🤖 _Heads up: this is ${config.BOT_NAME || "an AI assistant"} replying automatically. Message ${config.OWNER_NAME || "the owner"} directly if you need a real person._`,
+                            });
+                        }
+                        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+                        const controller = new AbortController();
+                        setTimeout(() => controller.abort(), 30000);
+                        const response = await fetch(url, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                                system_instruction: { parts: [{ text: config.AI_PERSONA || "" }] },
+                                contents: [{ parts: [{ text }] }],
+                            }),
+                            signal: controller.signal,
+                        });
+                        const data = await response.json();
+                        const answer = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+                        if (answer) {
+                            await sock.sendMessage(from, { text: answer }, { quoted: msg });
+                        }
+                    } catch (err) {
+                        console.log("Auto-chat error:", err.message);
+                    }
+                }
+            }
+            return;
+        }
 
         // Show typing/recording indicator if enabled
         try {
