@@ -222,16 +222,25 @@ async function startBot() {
             // Check if this is a reply to a pending "audio or video?" question
             const pending = commandList.pendingYt?.get(from);
             const choice = text.trim().toLowerCase();
-            if (pending && (choice === "audio" || choice === "video")) {
+            const wantsVideo =
+                choice === "2" ||
+                choice === "video";
+            const wantsAudio =
+                choice === "1" ||
+                choice === "audio";
+            
+            if (pending && (wantsAudio || wantsVideo)) {
                 commandList.pendingYt.delete(from);
+
                 await commandList.downloadYt(sock, {
                     from,
                     msg,
                     target: pending.target,
                     label: pending.label,
-                    wantsVideo: choice === "video",
+                    wantsVideo,
                     config,
                 });
+
                 return;
             }
 
