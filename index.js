@@ -38,6 +38,7 @@ const question = (text) => new Promise((resolve) => rl.question(text, resolve));
 // Holds the live Baileys socket once created, so the HTTP routes below
 // (used for browser-based pairing when there's no interactive terminal) can reach it.
 let sockRef = null;
+let latestQR = null;
 
 // ============================================
 // Load all commands from commands.js
@@ -115,8 +116,8 @@ async function startBot() {
             // you complete pairing from a browser instead.
             console.log(
                 "❌ No valid session found and no interactive terminal available.\n" +
-                "Open <your-render-url>/pair in a browser to get a pairing code, " +
-                "or set a SESSION_ID environment variable and restart."
+                "Open <your-render-url>/qr in a browser to scan a QR code, " +
+                "or /pair for a pairing code, or set a SESSION_ID environment variable and restart."
             );
         }
     }
@@ -124,7 +125,11 @@ async function startBot() {
     sock.ev.on("creds.update", saveCreds);
 
     sock.ev.on("connection.update", (update) => {
-        const { connection, lastDisconnect } = update;
+        const { connection, lastDisconnect, qr } = update;
+
+        if (qr) {
+            latestQR = qr;
+        }
 
         if (connection === "close") {
             const shouldReconnect =
@@ -133,6 +138,7 @@ async function startBot() {
             if (shouldReconnect) startBot();
         } else if (connection === "open") {
             console.log("✅ Bot successfully connect ho gaya WhatsApp se!");
+            latestQR = null;
             if (config.ALWAYS_ONLINE === "true" || config.ALWAYS_ONLINE === true) {
                 setInterval(() => {
                     sock.sendPresenceUpdate("available").catch(() => {});
@@ -315,6 +321,30 @@ const BOOTSTRAP_MODE = !(config.SESSION_ID || process.env.SESSION_ID);
 http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
 
+    if (BOOTSTRAP_MODE && url.pathname === "/qr") {
+        if (!sockRef) {
+            res.writeHead(200, { "Content-Type": "text/plain" });
+            return res.end("Bot is still starting up, refresh this page in a few seconds.");
+        }
+        if (sockRef.authState.creds.registered) {
+            res.writeHead(200, { "Content-Type": "text/plain" });
+            return res.end("Already linked to WhatsApp. Visit /session to get your SESSION_ID.");
+        }
+        if (!latestQR) {
+            res.writeHead(200, { "Content-Type": "text/plain" });
+            return res.end("QR not generated yet, refresh this page in a few seconds.");
+        }
+        try {
+            const QRCode = require("qrcode");
+            const pngBuffer = await QRCode.toBuffer(latestQR, { width: 320 });
+            res.writeHead(200, { "Content-Type": "image/png", "Refresh": "20" });
+            return res.end(pngBuffer);
+        } catch (err) {
+            res.writeHead(500, { "Content-Type": "text/plain" });
+            return res.end(`Failed to render QR: ${err.message}`);
+        }
+    }
+
     if (BOOTSTRAP_MODE && url.pathname === "/pair") {
         if (!sockRef) {
             res.writeHead(200, { "Content-Type": "text/plain" });
@@ -358,7 +388,7 @@ http.createServer(async (req, res) => {
 }).listen(PORT, () => {
     console.log(`🌐 Health-check server listening on port ${PORT}`);
     if (BOOTSTRAP_MODE) {
-        console.log("ℹ️  No SESSION_ID set — visit /pair on this server's URL to link WhatsApp from a browser.");
+        console.log("ℹ️  No SESSION_ID set — visit /qr (scan) or /pair (code) on this server's URL to link WhatsApp from a browser.");
     }
 });
 
