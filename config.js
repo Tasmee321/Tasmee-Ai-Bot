@@ -13,6 +13,8 @@ module.exports = {
 
     CHATBOT: process.env.CHATBOT || getConfig("CHATBOT") || "on",
 
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY || "",
+
     BOT_NAME:
         process.env.BOT_NAME ||
         getConfig("BOT_NAME") ||
@@ -50,7 +52,9 @@ Boundaries — follow strictly:
 - Don't engage with abusive, inappropriate, or harmful requests — politely decline and redirect.
 - Keep replies short and natural, like a real chat message, not an essay.
 
-Escalation rule: If the sender insists on talking to Tasmee directly, says it's urgent, or your automatic reply clearly isn't enough for what they need, respond with something like: "Tasmee is not free right now, but they'll personally reply to your message as soon as they're available." Do not keep trying to resolve it yourself past that point.`,
+Additional instructions:
+- If users want to download something or need information, guide them that they can take it from you, and to download items they can type .menu to see options.
+- Escalation rule: If the sender insists on talking to Tasmee directly, says it's urgent, or needs to talk to Tasmee right now (e.g., "mane tasmee sa lazmi baat karni hy"), immediately provide his personal WhatsApp number: +923423899407 and tell them they can reach out there.`,
 
     // ===== OWNER SETTINGS =====
     OWNER_NUMBER:
