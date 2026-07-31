@@ -28,9 +28,17 @@ function saveJSON(filePath, data) {
 }
 
 function isOwner(msg, config) {
-    const sender = msg.key.participant || msg.key.remoteJid;
-    const ownerNumbers = [config.OWNER_NUMBER, config.DEV].filter(Boolean);
-    return ownerNumbers.some((num) => sender.startsWith(num));
+    // If the message was sent from the bot's own linked WhatsApp account,
+    // it's always the owner — this is the most reliable check, since
+    // WhatsApp's newer "LID" JID format doesn't always match the phone number.
+    if (msg.key.fromMe) return true;
+
+    const sender = msg.key.participant || msg.key.remoteJid || "";
+    const senderDigits = sender.replace(/[^0-9]/g, "");
+    const ownerNumbers = [config.OWNER_NUMBER, config.DEV]
+        .filter(Boolean)
+        .map((n) => String(n).replace(/[^0-9]/g, ""));
+    return ownerNumbers.some((num) => num && (senderDigits === num || senderDigits.endsWith(num)));
 }
 
 module.exports = [
@@ -124,13 +132,15 @@ module.exports = [
             }
 
             try {
-                const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(
+                const url = `https://api.streamelements.com/kappa/v2/speech?voice=Brian&text=${encodeURIComponent(
                     text
-                )}&tl=en&client=tw-ob`;
+                )}`;
 
-                const response = await fetch(url, {
-                    headers: { "User-Agent": "Mozilla/5.0" },
-                });
+                const response = await fetch(url);
+
+                if (!response.ok || !response.headers.get("content-type")?.includes("audio")) {
+                    throw new Error("TTS service did not return valid audio. Please try again.");
+                }
 
                 const arrayBuffer = await response.arrayBuffer();
                 const audioBuffer = Buffer.from(arrayBuffer);
@@ -801,7 +811,7 @@ module.exports = [
         name: "yt",
         aliases: ["youtube", "ytmp3", "ytmp4"],
         description: "Download YouTube audio/video. Usage: .yt <link OR song name> [audio|video]",
-        async execute(sock, { from, args, text, msg }) {
+        async execute(sock, { from, args, text, msg, config }) {
             const { spawn } = require("child_process");
             const os = require("os");
 
