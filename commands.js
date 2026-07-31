@@ -64,6 +64,11 @@ async function downloadYt(sock, { from, msg, target, label, wantsVideo, config }
         "--no-check-certificates",
         "--cookies",
         path.join(__dirname, "cookies.txt"), // Path of the cookies file
+        // YouTube ab JS challenge (n-parameter) use karta hai jise yt-dlp ko
+        // solve karna parta hai. Deno by default try hoti hai jo container mein
+        // nahi hai, isliye Node ko bataya ja raha hai (jo already image mein maujood hai)
+        "--js-runtimes",
+        "node",
         target,
     ];
 
