@@ -752,21 +752,21 @@ const allCommands = [
 
             const apiKey = config.OPENAI_API_KEY || process.env.OPENAI_API_KEY;
             if (!apiKey) {
-                await sock.sendMessage(from, { text: "⚠️ OpenAI API key not set in config." });
+                await sock.sendMessage(from, { text: "⚠️ API key not set in config." });
                 return;
             }
 
             await sock.sendMessage(from, { text: "🤖 Thinking..." });
 
             try {
-                const response = await fetch("https://api.openai.com/v1/chat/completions", {
+                const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
                     method: "POST",
                     headers: {
                         "Content-Type": "application/json",
                         "Authorization": `Bearer ${apiKey}`
                     },
                     body: JSON.stringify({
-                        model: "gpt-4o-mini",
+                        model: "llama-3.3-70b-versatile",
                         messages: [
                             { role: "system", content: config.AI_PERSONA || "You are a helpful assistant." },
                             { role: "user", content: question }
@@ -776,7 +776,7 @@ const allCommands = [
 
                 const data = await response.json();
                 if (!response.ok) {
-                    throw new Error(data.error?.message || `OpenAI API Error (${response.status})`);
+                    throw new Error(data.error?.message || `Groq API Error (${response.status})`);
                 }
 
                 const answer = data.choices?.[0]?.message?.content || "Sorry, I couldn't generate a response.";
