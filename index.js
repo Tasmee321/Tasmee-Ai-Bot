@@ -159,6 +159,15 @@ async function startBot() {
 
         const from = msg.key.remoteJid;
 
+        // 🔍 DEBUG LOG — remove this once everything is confirmed working
+        const debugText =
+            msg.message.conversation ||
+            msg.message.extendedTextMessage?.text ||
+            "[non-text message]";
+        console.log(
+            `📩 Message received | from: ${from} | participant: ${msg.key.participant || "(none)"} | fromMe: ${msg.key.fromMe} | text: "${debugText}"`
+        );
+
         // Auto-read messages if enabled
         if ((config.READ_MESSAGE === "true" || config.READ_MESSAGE === true) && !msg.key.fromMe) {
             await sock.readMessages([msg.key]).catch(() => {});
@@ -280,6 +289,8 @@ async function startBot() {
         const args = text.slice(PREFIX.length).trim().split(/ +/);
         const commandName = args.shift().toLowerCase();
         const command = commands.get(commandName);
+
+        console.log(`🔎 Parsed command: "${commandName}" | found: ${!!command}`);
 
         if (!command) return;
 
