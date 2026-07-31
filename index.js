@@ -297,28 +297,52 @@ async function startBot() {
                 text.trim() &&
                 (config.CHATBOT === "on" || config.CHATBOT === "true" || config.CHATBOT === true)
             ) {
-                const apiKey = config.GEMINI_API_KEY || process.env.GEMINI_API_KEY;
-                if (apiKey) {
+                const geminiKey = config.GEMINI_API_KEY || process.env.GEMINI_API_KEY;
+                const groqKey = config.OPENAI_API_KEY || process.env.OPENAI_API_KEY;
+
+                if (geminiKey || groqKey) {
                     try {
                         // No canned "I'm an AI" intro here on purpose — the bot
                         // should just chat naturally like a person. AI_PERSONA
                         // (config.js) already tells the model itself to
                         // mention .menu for downloads and to hand out the
                         // owner's number only if directly asked/urgent.
-                        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
-                        const controller = new AbortController();
-                        setTimeout(() => controller.abort(), 30000);
-                        const response = await fetch(url, {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({
-                                system_instruction: { parts: [{ text: config.AI_PERSONA || "" }] },
-                                contents: [{ parts: [{ text }] }],
-                            }),
-                            signal: controller.signal,
-                        });
-                        const data = await response.json();
-                        const answer = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+                        let answer = null;
+
+                        if (geminiKey) {
+                            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`;
+                            const controller = new AbortController();
+                            setTimeout(() => controller.abort(), 30000);
+                            const response = await fetch(url, {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({
+                                    system_instruction: { parts: [{ text: config.AI_PERSONA || "" }] },
+                                    contents: [{ parts: [{ text }] }],
+                                }),
+                                signal: controller.signal,
+                            });
+                            const data = await response.json();
+                            answer = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+                        } else if (groqKey) {
+                            const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+                                method: "POST",
+                                headers: {
+                                    "Content-Type": "application/json",
+                                    "Authorization": `Bearer ${groqKey}`,
+                                },
+                                body: JSON.stringify({
+                                    model: "llama-3.3-70b-versatile",
+                                    messages: [
+                                        { role: "system", content: config.AI_PERSONA || "You are a helpful assistant." },
+                                        { role: "user", content: text },
+                                    ],
+                                }),
+                            });
+                            const data = await response.json();
+                            answer = data.choices?.[0]?.message?.content;
+                        }
+
                         if (answer) {
                             await sock.sendMessage(from, { text: answer }, { quoted: msg });
                         }
