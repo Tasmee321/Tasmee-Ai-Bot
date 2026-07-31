@@ -1,0 +1,10 @@
+node_modules
+   npm-debug.log
+   session/
+   auth_info*/
+   *.session
+   .env
+   .env.*
+   .git
+   .gitignore
+   *.log
