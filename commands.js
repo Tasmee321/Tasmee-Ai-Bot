@@ -160,6 +160,33 @@ async function downloadYt(sock, { from, msg, target, label, wantsVideo, config }
     }
 }
 
+async function startYtFlow(sock, { from, msg, query, wantsVideo, config }) {
+    const trimmed = (query || "").trim();
+    if (!trimmed) {
+        await sock.sendMessage(from, { text: "❌ Konsa gana/video chahiye? Naam ya link bhej dein." }, { quoted: msg });
+        return;
+    }
+
+    const directUrl = /youtube\.com|youtu\.be/i.test(trimmed) ? trimmed : null;
+    const target = directUrl || `ytsearch1:${trimmed}`;
+    const label = directUrl ? "this link" : trimmed;
+
+    if (wantsVideo === true || wantsVideo === false) {
+        await downloadYt(sock, { from, msg, target, label, wantsVideo, config });
+        return;
+    }
+
+    module.exports.pendingYt.set(from, { target, label });
+    setTimeout(() => {
+        const pending = module.exports.pendingYt.get(from);
+        if (pending && pending.target === target) module.exports.pendingYt.delete(from);
+    }, 60000);
+
+    await sock.sendMessage(from, {
+        text: `🎬 Download *${label}* as:\n\n1️⃣ Reply *audio*\n2️⃣ Reply *video*`,
+    }, { quoted: msg });
+}
+
 const allCommands = [
     {
         name: "ping",
@@ -826,32 +853,22 @@ const allCommands = [
             const explicitVideo = /\bvideo\b/i.test(text) || text.includes("ytmp4");
             const explicitAudio = /\baudio\b/i.test(text) || text.includes("ytmp3");
             const cleanArgs = args.filter((a) => !/^(audio|video)$/i.test(a));
-            const directUrl = cleanArgs.find((a) => a.includes("youtube.com") || a.includes("youtu.be"));
+            const query = cleanArgs.join(" ");
 
-            if (!directUrl && cleanArgs.length === 0) {
+            if (!query) {
                 await sock.sendMessage(from, {
                     text: "❌ Please provide a YouTube link or a song/video name.\nExample: *.yt Attention Charlie Puth*",
                 });
                 return;
             }
 
-            const target = directUrl || `ytsearch1:${cleanArgs.join(" ")}`;
-            const label = directUrl ? "this link" : cleanArgs.join(" ");
-
-            if (explicitVideo || explicitAudio) {
-                await downloadYt(sock, { from, msg, target, label, wantsVideo: explicitVideo, config });
-                return;
-            }
-
-            module.exports.pendingYt.set(from, { target, label });
-            setTimeout(() => {
-                const pending = module.exports.pendingYt.get(from);
-                if (pending && pending.target === target) module.exports.pendingYt.delete(from);
-            }, 60000);
-
-            await sock.sendMessage(from, {
-                text: `🎬 Download *${label}* as:\n\n1️⃣ Reply *audio*\n2️⃣ Reply *video*`,
-            }, { quoted: msg });
+            await startYtFlow(sock, {
+                from,
+                msg,
+                query,
+                wantsVideo: explicitVideo ? true : explicitAudio ? false : null,
+                config,
+            });
         },
     },
     {
@@ -983,3 +1000,4 @@ module.exports.pendingYt = new Map();
 module.exports.downloadYt = downloadYt;
 module.exports.isOwner = isOwner;
 module.exports.synthesizeSpeech = synthesizeSpeech;
+module.exports.startYtFlow = startYtFlow;
