@@ -51,6 +51,11 @@ const TYPE_REACT_MAP = {
     sticker: "🖼️",
     tts: "🗣️",
     help: "📜",
+    image: "🎨",
+    weather: "🌦️",
+    news: "📰",
+    pinterest: "📌",
+    search: "🔎",
 };
 const DEFAULT_COMMAND_REACT = "✅"; // used for commands not listed above
 
@@ -102,6 +107,18 @@ const TTS_TOPIC_REGEX = /\bvoice\s*note\b|\bawaaz\s*mein\b|\bbol\s*kar\s*sunao\b
 const TTS_ACTION_REGEX = /\b(bana|bnao|bnado|bna|karo|kardo|bhejo|chahiye|chaiye)\b/i;
 function isTtsRequest(text) {
     return TTS_TOPIC_REGEX.test(text) && TTS_ACTION_REGEX.test(text);
+}
+
+const IMAGE_TOPIC_REGEX = /\b(image|img|photo|pic|picture|tasveer|wallpaper)\b/i;
+const IMAGE_ACTION_REGEX = /\b(bana|bnao|bnado|bna|banado|generate|create|chahiye|chaiye|do|bhejo|dedo)\b/i;
+function isImageRequest(text) {
+    return IMAGE_TOPIC_REGEX.test(text) && IMAGE_ACTION_REGEX.test(text);
+}
+
+const WEATHER_TOPIC_REGEX = /\b(mausam|weather|temperature)\b/i;
+const WEATHER_QUESTION_REGEX = /\b(kaisa|kesa|kya|how|what|batao|btao|btio)\b/i;
+function isWeatherRequest(text) {
+    return WEATHER_TOPIC_REGEX.test(text) && WEATHER_QUESTION_REGEX.test(text);
 }
 
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -163,18 +180,31 @@ function restoreSessionFromEnv() {
 // benefit from per-chat memory (recent history + remembered name).
 // Returns the answer string, or null if no API key / no answer.
 // ============================================
-async function getAiReply(text, from) {
+async function getAiReply(text, from, sock, msg) {
     const geminiKey = config.GEMINI_API_KEY || process.env.GEMINI_API_KEY;
     const groqKey = config.OPENAI_API_KEY || process.env.OPENAI_API_KEY;
     if (!geminiKey && !groqKey) return null;
 
     const { name, history } = memory.getContext(from);
-    let systemPrompt = config.AI_PERSONA || "";
+    const commandsModule = require("./commands");
+    let systemPrompt = await commandsModule.buildSystemPrompt(config.AI_PERSONA || "", text);
     if (name) systemPrompt += `\n\nThe user's name in this chat is "${name}" — you were told this earlier, use it naturally when it fits.`;
 
     let answer = null;
     try {
-        if (geminiKey) {
+        if (groqKey && sock && msg) {
+            // Groq path: supports tool-calling, so the AI can actually
+            // trigger real commands (download, image, weather, etc.).
+            answer = await commandsModule.chatWithTools(sock, {
+                from,
+                msg,
+                config,
+                apiKey: groqKey,
+                systemPrompt,
+                history,
+                question: text,
+            });
+        } else if (geminiKey) {
             const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`;
             const controller = new AbortController();
             setTimeout(() => controller.abort(), 30000);
@@ -403,7 +433,7 @@ async function startBot() {
                     return;
                 }
 
-                const answer = await getAiReply(transcript, from);
+                const answer = await getAiReply(transcript, from, sock, msg);
                 if (answer) {
                     await sock.sendMessage(from, { text: answer }, { quoted: msg });
                     // Bonus: also reply with a spoken voice note, best-effort.
@@ -447,6 +477,15 @@ async function startBot() {
                 return;
             }
 
+            // Follow-up to "kaisi image chahiye?" — actually generates and
+            // sends the real AI image once they describe it.
+            const pendingImg = commandList.pendingImage?.get(from);
+            if (pendingImg && !isGroup && !msg.key.fromMe && text.trim()) {
+                commandList.pendingImage.delete(from);
+                await commandList.fetchOrGenerateImage(sock, from, msg, text.trim());
+                return;
+            }
+
             // Follow-up to "which song/video?" — actually starts the real
             // download flow (reuses the same .yt logic, incl. audio/video ask).
             if (!isGroup && !msg.key.fromMe && text.trim() && consumePending(pendingSongRequest, from)) {
@@ -486,7 +525,7 @@ async function startBot() {
                 await sock.sendMessage(
                     from,
                     {
-                        text: `📞 Ji zaroor, aap seedha baat kar sakte hain:\n*${OWNER_PERSONAL_NAME}*\n*${OWNER_PERSONAL_NUMBER}*`,
+                        text: `📞 Ji zaroor, aap seedha baat kar sakte hain:\n*${OWNER_PERSONAL_NAME}*\n${OWNER_PERSONAL_NUMBER} (wa.me/923423899407)`,
                     },
                     { quoted: msg }
                 );
@@ -515,6 +554,33 @@ async function startBot() {
                 return;
             }
 
+            // Natural "image bana do" / "picture chahiye" style request —
+            // ask what kind of image, then actually generate it (handled by
+            // the pendingImg check above).
+            if (!isGroup && !msg.key.fromMe && text.trim() && isImageRequest(text)) {
+                commandList.pendingImage.set(from, Date.now());
+                setTimeout(() => {
+                    const ts = commandList.pendingImage.get(from);
+                    if (ts && Date.now() - ts >= PENDING_INTENT_TTL) commandList.pendingImage.delete(from);
+                }, PENDING_INTENT_TTL);
+                await sock.sendMessage(from, {
+                    text: "🖼️ Zaroor! Kis cheez ki image chahiye? Naam bata dein.",
+                }, { quoted: msg });
+                return;
+            }
+
+            // Natural "mausam kaisa hai" / "weather kya hai" style request —
+            // runs the real .weather command directly.
+            if (!isGroup && !msg.key.fromMe && text.trim() && isWeatherRequest(text)) {
+                const weatherCmd = commands.get("weather");
+                if (weatherCmd) {
+                    const cityMatch = text.match(/\b(?:mausam|weather|temperature)\b\s*(?:of|mein|ka|main)?\s*([a-zA-Z\u0600-\u06FF]{2,30})?/i);
+                    const cityArg = cityMatch?.[1]?.trim();
+                    await weatherCmd.execute(sock, { from, args: cityArg ? [cityArg] : [], msg, config });
+                    return;
+                }
+            }
+
             // AI auto-chat: reply like an assistant to private messages only
             // (not groups, not your own outgoing messages, not empty text).
             // No canned "I'm an AI" intro here on purpose — the bot should
@@ -527,7 +593,7 @@ async function startBot() {
                 text.trim() &&
                 (config.CHATBOT === "on" || config.CHATBOT === "true" || config.CHATBOT === true)
             ) {
-                const answer = await getAiReply(text, from);
+                const answer = await getAiReply(text, from, sock, msg);
                 if (answer) {
                     await sock.sendMessage(from, { text: answer }, { quoted: msg });
                 }
@@ -574,7 +640,9 @@ async function startBot() {
             });
         } catch (err) {
             console.log(`❌ Error running command "${commandName}":`, err.message);
-            await sock.sendMessage(from, { text: `❌ Command mein error aaya: ${err.message}` });
+            await sock.sendMessage(from, {
+                text: `❌ Command mein error aaya: ${err.message}\n\n🛠️ Agar yeh problem barqarar rahe to developer ko batayein: wa.me/923423899407`,
+            });
         }
     });
 
