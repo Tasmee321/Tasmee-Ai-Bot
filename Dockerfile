@@ -8,11 +8,16 @@ WORKDIR /app
 # - ffmpeg: REQUIRED so yt-dlp can actually convert audio to real .mp3
 #   (without it, "bestaudio" downloads raw webm/opus which WhatsApp mobile
 #   rejects even if we just rename it to .mp3)
+# - fonts-dejavu-core + fontconfig: REQUIRED for sharp/librsvg to actually
+#   render text inside generated SVG->PNG images (e.g. the .text command).
+#   Without any fonts installed, text comes out blank/invisible on the image.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     curl \
     git \
     ffmpeg \
+    fonts-dejavu-core \
+    fontconfig \
     ca-certificates \
     && curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp \
     && chmod a+rx /usr/local/bin/yt-dlp \
