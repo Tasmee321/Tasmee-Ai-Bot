@@ -9,6 +9,7 @@ const {
     useMultiFileAuthState,
     DisconnectReason,
     fetchLatestBaileysVersion,
+    downloadMediaMessage,
 } = require("@whiskeysockets/baileys");
 
 const { Boom } = require("@hapi/boom");
@@ -18,6 +19,7 @@ const fs = require("fs");
 const path = require("path");
 
 const config = require("./config");
+const memory = require("./lib/memory");
 
 const SESSION_FOLDER = "./session";
 const PREFIX = config.PREFIX || ".";
@@ -112,6 +114,102 @@ function restoreSessionFromEnv() {
         console.log("✅ Session restored from SESSION_ID.");
     } catch (err) {
         console.log("❌ Failed to restore session from SESSION_ID:", err.message);
+    }
+}
+
+// ============================================
+// Shared AI reply helper — used for both normal text auto-chat and
+// transcribed voice-note replies, so they behave identically and both
+// benefit from per-chat memory (recent history + remembered name).
+// Returns the answer string, or null if no API key / no answer.
+// ============================================
+async function getAiReply(text, from) {
+    const geminiKey = config.GEMINI_API_KEY || process.env.GEMINI_API_KEY;
+    const groqKey = config.OPENAI_API_KEY || process.env.OPENAI_API_KEY;
+    if (!geminiKey && !groqKey) return null;
+
+    const { name, history } = memory.getContext(from);
+    let systemPrompt = config.AI_PERSONA || "";
+    if (name) systemPrompt += `\n\nThe user's name in this chat is "${name}" — you were told this earlier, use it naturally when it fits.`;
+
+    let answer = null;
+    try {
+        if (geminiKey) {
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`;
+            const controller = new AbortController();
+            setTimeout(() => controller.abort(), 30000);
+            // Gemini's history format: alternating user/model turns.
+            const geminiHistory = history.map((h) => ({
+                role: h.role === "assistant" ? "model" : "user",
+                parts: [{ text: h.content }],
+            }));
+            const response = await fetch(url, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    system_instruction: { parts: [{ text: systemPrompt }] },
+                    contents: [...geminiHistory, { role: "user", parts: [{ text }] }],
+                }),
+                signal: controller.signal,
+            });
+            const data = await response.json();
+            answer = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        } else if (groqKey) {
+            const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${groqKey}`,
+                },
+                body: JSON.stringify({
+                    model: "llama-3.3-70b-versatile",
+                    messages: [
+                        { role: "system", content: systemPrompt || "You are a helpful assistant." },
+                        ...history,
+                        { role: "user", content: text },
+                    ],
+                }),
+            });
+            const data = await response.json();
+            answer = data.choices?.[0]?.message?.content;
+        }
+    } catch (err) {
+        console.log("AI reply error:", err.message);
+        return null;
+    }
+
+    if (answer) memory.remember(from, text, answer);
+    return answer || null;
+}
+
+// ============================================
+// Speech-to-text for incoming voice notes, via Groq's Whisper endpoint
+// (same API key already used for the .ai / auto-chat text feature).
+// Returns the transcribed text, or null if it couldn't be transcribed.
+// ============================================
+async function transcribeVoice(buffer) {
+    const groqKey = config.OPENAI_API_KEY || process.env.OPENAI_API_KEY;
+    if (!groqKey) return null;
+
+    try {
+        const form = new FormData();
+        form.append("file", new Blob([buffer], { type: "audio/ogg" }), "voice.ogg");
+        form.append("model", "whisper-large-v3-turbo");
+
+        const response = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
+            method: "POST",
+            headers: { "Authorization": `Bearer ${groqKey}` },
+            body: form,
+        });
+        const data = await response.json();
+        if (!response.ok) {
+            console.log("Transcription error:", data?.error?.message || response.status);
+            return null;
+        }
+        return data?.text?.trim() || null;
+    } catch (err) {
+        console.log("Transcription error:", err.message);
+        return null;
     }
 }
 
@@ -244,6 +342,45 @@ async function startBot() {
             msg.message.videoMessage?.caption ||
             "";
 
+        // Voice notes: transcribe them and reply like a normal chat message
+        // (text + a spoken reply back), private chats only.
+        const voiceMessage = msg.message.audioMessage;
+        if (
+            voiceMessage &&
+            !isGroup &&
+            !msg.key.fromMe &&
+            (config.CHATBOT === "on" || config.CHATBOT === "true" || config.CHATBOT === true)
+        ) {
+            try {
+                await sock.sendPresenceUpdate("recording", from).catch(() => {});
+                const buffer = await downloadMediaMessage(msg, "buffer", {});
+                const transcript = await transcribeVoice(buffer);
+
+                if (!transcript) {
+                    await sock.sendMessage(from, {
+                        text: "🎙️ Sorry, voice note samajh nahi aayi — thora clear bol kar dobara bhejein.",
+                    }, { quoted: msg });
+                    return;
+                }
+
+                const answer = await getAiReply(transcript, from);
+                if (answer) {
+                    await sock.sendMessage(from, { text: answer }, { quoted: msg });
+                    // Bonus: also reply with a spoken voice note, best-effort.
+                    try {
+                        const commandsModule = require("./commands");
+                        const oggBuffer = await commandsModule.synthesizeSpeech(answer);
+                        await sock.sendMessage(from, { audio: oggBuffer, mimetype: "audio/ogg; codecs=opus", ptt: true });
+                    } catch (err) {
+                        console.log("Voice reply synth skipped:", err.message);
+                    }
+                }
+            } catch (err) {
+                console.log("Voice note handling error:", err.message);
+            }
+            return;
+        }
+
         if (!text.startsWith(PREFIX)) {
             // Check if this is a reply to a pending "audio or video?" question
             const pending = commandList.pendingYt?.get(from);
@@ -290,65 +427,20 @@ async function startBot() {
             }
 
             // AI auto-chat: reply like an assistant to private messages only
-            // (not groups, not your own outgoing messages, not empty text)
+            // (not groups, not your own outgoing messages, not empty text).
+            // No canned "I'm an AI" intro here on purpose — the bot should
+            // just chat naturally like a person. AI_PERSONA (config.js)
+            // already tells the model itself to mention .menu for downloads
+            // and to hand out the owner's number only if directly asked/urgent.
             if (
                 !isGroup &&
                 !msg.key.fromMe &&
                 text.trim() &&
                 (config.CHATBOT === "on" || config.CHATBOT === "true" || config.CHATBOT === true)
             ) {
-                const geminiKey = config.GEMINI_API_KEY || process.env.GEMINI_API_KEY;
-                const groqKey = config.OPENAI_API_KEY || process.env.OPENAI_API_KEY;
-
-                if (geminiKey || groqKey) {
-                    try {
-                        // No canned "I'm an AI" intro here on purpose — the bot
-                        // should just chat naturally like a person. AI_PERSONA
-                        // (config.js) already tells the model itself to
-                        // mention .menu for downloads and to hand out the
-                        // owner's number only if directly asked/urgent.
-                        let answer = null;
-
-                        if (geminiKey) {
-                            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`;
-                            const controller = new AbortController();
-                            setTimeout(() => controller.abort(), 30000);
-                            const response = await fetch(url, {
-                                method: "POST",
-                                headers: { "Content-Type": "application/json" },
-                                body: JSON.stringify({
-                                    system_instruction: { parts: [{ text: config.AI_PERSONA || "" }] },
-                                    contents: [{ parts: [{ text }] }],
-                                }),
-                                signal: controller.signal,
-                            });
-                            const data = await response.json();
-                            answer = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-                        } else if (groqKey) {
-                            const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-                                method: "POST",
-                                headers: {
-                                    "Content-Type": "application/json",
-                                    "Authorization": `Bearer ${groqKey}`,
-                                },
-                                body: JSON.stringify({
-                                    model: "llama-3.3-70b-versatile",
-                                    messages: [
-                                        { role: "system", content: config.AI_PERSONA || "You are a helpful assistant." },
-                                        { role: "user", content: text },
-                                    ],
-                                }),
-                            });
-                            const data = await response.json();
-                            answer = data.choices?.[0]?.message?.content;
-                        }
-
-                        if (answer) {
-                            await sock.sendMessage(from, { text: answer }, { quoted: msg });
-                        }
-                    } catch (err) {
-                        console.log("Auto-chat error:", err.message);
-                    }
+                const answer = await getAiReply(text, from);
+                if (answer) {
+                    await sock.sendMessage(from, { text: answer }, { quoted: msg });
                 }
             }
             return;
