@@ -226,7 +226,7 @@ async function getAiReply(text, from, sock, msg) {
             answer = data?.candidates?.[0]?.content?.parts?.[0]?.text;
         } else if (hasGroqKey) {
             const data = await groq.groqChat({
-                model: "llama-3.3-70b-versatile",
+                model: "llama-3.1-8b-instant",
                 messages: [
                     { role: "system", content: systemPrompt || "You are a helpful assistant." },
                     ...history,
