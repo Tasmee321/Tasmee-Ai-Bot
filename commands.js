@@ -604,7 +604,7 @@ const allCommands = [
                 "🌦️ LIVE INFO": ["weather", "news"],
                 "👑 OWNER": ["ban", "unban", "banlist", "block", "unblock", "sudo", "delsudo", "listsudo", "mode", "autoread"],
                 "⚙️ SETTINGS": [
-                    "welcome", "goodbye", "setwelcome", "setgoodbye", "antilink", "antidelete",
+                    "welcome", "goodbye", "setwelcome", "setgoodbye", "antilink", "antidelete", "antiviewonce",
                     "editpath", "recording", "autotyping", "online", "autoreact", "anticall",
                     "anticallmsg", "adminaction", "statuslike", "prefix", "botname", "ownername",
                     "ownernumber", "description", "stickername", "settings",
@@ -622,12 +622,16 @@ const allCommands = [
             menu += `◉ 🏷️ ᴠᴇʀsɪᴏɴ: 1.0.0\n`;
             menu += `◉ 📱 ᴏᴡɴᴇʀ ᴄᴏɴᴛᴀᴄᴛ: ${config.OWNER_NUMBER || "N/A"}\n`;
 
+            const prefix = config.PREFIX || ".";
             for (const [category, cmdNames] of Object.entries(categories)) {
-                menu += `━━━━━『 ${category} 』━━━━━\n◉\n`;
+                menu += `\n╭─「 ${category} 」\n`;
                 for (const cmdName of cmdNames) {
                     const cmd = allCommands.find((c) => c.name === cmdName);
-                    if (cmd) menu += `◉ ➤ ${cmd.name}\n`;
+                    if (!cmd) continue;
+                    const aliasText = cmd.aliases && cmd.aliases.length ? ` (${cmd.aliases.map((a) => `${prefix}${a}`).join(", ")})` : "";
+                    menu += `│ ◈ ${prefix}${cmd.name}${aliasText}\n`;
                 }
+                menu += `╰────────────\n`;
             }
 
             menu += `\n🤝 Main aapki madad karne ke liye yahan hoon!`;
@@ -1049,6 +1053,18 @@ const allCommands = [
             if (!text) return sock.sendMessage(from, { text: `Current: *${config.GOODBYE_MSG || "(default)"}*` });
             config.GOODBYE_MSG = text;
             await sock.sendMessage(from, { text: `✅ Goodbye message updated.` });
+        },
+    },
+    {
+        name: "antiviewonce",
+        aliases: ["antivv", "vv"],
+        description: "Toggle auto-revealing view-once photos/videos/voice notes",
+        async execute(sock, { from, args, config, msg }) {
+            if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
+            const choice = args[0]?.toLowerCase();
+            if (choice !== "on" && choice !== "off") return sock.sendMessage(from, { text: `Current: *${config.ANTI_VV === "true" ? "ON" : "OFF"}*` });
+            config.ANTI_VV = choice === "on" ? "true" : "false";
+            await sock.sendMessage(from, { text: `✅ Anti view-once is now *${choice.toUpperCase()}*.` });
         },
     },
     {
