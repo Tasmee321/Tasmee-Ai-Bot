@@ -552,7 +552,7 @@ async function chatWithTools(sock, { from, msg, config, systemPrompt, history, q
         { role: "user", content: question },
     ];
 
-    const firstData = await groq.groqChat({ model: "llama-3.3-70b-versatile", messages: baseMessages, tools: AI_TOOLS, tool_choice: "auto" });
+    const firstData = await groq.groqChat({ model: "llama-3.1-8b-instant", messages: baseMessages, tools: AI_TOOLS, tool_choice: "auto" });
 
     const choiceMsg = firstData.choices?.[0]?.message;
     const toolCalls = choiceMsg?.tool_calls;
@@ -570,7 +570,7 @@ async function chatWithTools(sock, { from, msg, config, systemPrompt, history, q
     }
 
     const followData = await groq.groqChat({
-        model: "llama-3.3-70b-versatile",
+        model: "llama-3.1-8b-instant",
         messages: [...baseMessages, choiceMsg, ...toolResultMessages],
     });
     return followData.choices?.[0]?.message?.content || "✅ Ho gaya!";
@@ -1525,7 +1525,7 @@ const allCommands = [
                 const systemPrompt =
                     `Aaj ki tareekh: ${getPakistanDateTimeString()}. Neeche live web search results diye gaye hain — inhe apne alfaz mein use karke, Roman Urdu mein, seedha aur mukhtasar jawab dein. Aakhir mein 1-2 source links bhi de dein.\n\n${context}`;
                 const data = await groq.groqChat({
-                    model: "llama-3.3-70b-versatile",
+                    model: "llama-3.1-8b-instant",
                     messages: [
                         { role: "system", content: systemPrompt },
                         { role: "user", content: query },
