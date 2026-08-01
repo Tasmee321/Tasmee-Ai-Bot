@@ -377,6 +377,32 @@ async function startBot() {
             return;
         }
 
+        // Reveal "View Once" photos/videos/voice notes automatically (if enabled).
+        // WhatsApp normally hides these after one open; we grab the media the
+        // moment it arrives and resend it in the same chat as a normal message.
+        const vvMessage =
+            msg.message.viewOnceMessageV2?.message ||
+            msg.message.viewOnceMessageV2Extension?.message ||
+            msg.message.viewOnceMessage?.message;
+        if (vvMessage && (config.ANTI_VV === "true" || config.ANTI_VV === true)) {
+            try {
+                const fakeMsg = { ...msg, message: vvMessage };
+                const buffer = await downloadMediaMessage(fakeMsg, "buffer", {});
+                const senderTag = (msg.key.participant || from).split("@")[0];
+                const caption = `👁️ *View-once message revealed*\n👤 From: ${senderTag}`;
+                if (vvMessage.imageMessage) {
+                    await sock.sendMessage(from, { image: buffer, caption }).catch(() => {});
+                } else if (vvMessage.videoMessage) {
+                    await sock.sendMessage(from, { video: buffer, caption }).catch(() => {});
+                } else if (vvMessage.audioMessage) {
+                    await sock.sendMessage(from, { audio: buffer, mimetype: "audio/ogg; codecs=opus", ptt: true }).catch(() => {});
+                    await sock.sendMessage(from, { text: caption }).catch(() => {});
+                }
+            } catch (err) {
+                console.log("Anti-viewonce error:", err.message);
+            }
+        }
+
         // Note: we no longer return early on fromMe, so commands sent from your own
         // WhatsApp (self-chat / testing) still get processed.
 
