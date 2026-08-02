@@ -628,6 +628,19 @@ async function chatWithTools(sock, { from, msg, config, systemPrompt, history, q
     return followData.choices?.[0]?.message?.content || "✅ Ho gaya!";
 }
 
+// Generic downloader for Instagram/Facebook/Twitter via cobalt.tools (a free,
+// actively-maintained public API that handles many platforms in one place).
+async function cobaltDownload(url) {
+    const res = await fetch("https://api.cobalt.tools/api/json", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ url }),
+    });
+    const data = await res.json();
+    if (data.status === "error") throw new Error(data.text || "Download failed.");
+    return data.url || null;
+}
+
 const allCommands = [
     {
         name: "ping",
@@ -650,43 +663,50 @@ const allCommands = [
             const secs = uptimeSec % 60;
 
             const categories = {
-                "🤖 AI": ["ai", "search"],
-                "📥 DOWNLOAD": ["yt", "tiktok", "pinterest"],
-                "🎨 MEDIA": ["sticker", "tts", "text", "image"],
-                "🌦️ LIVE INFO": ["weather", "news"],
-                "👑 OWNER": ["ban", "unban", "banlist", "block", "unblock", "sudo", "delsudo", "listsudo", "mode", "autoread"],
+                "🤖 AI & SMART": ["ai", "search", "translate", "shayari", "joke", "quote"],
+                "📥 DOWNLOAD": ["yt", "tiktok", "pinterest", "instagram", "facebook", "twitter", "statusdl"],
+                "🎨 MEDIA": ["sticker", "toimg", "tts", "text", "image"],
+                "🕌 ISLAMIC": ["prayertimes", "qibla", "hijri"],
+                "🌦️ LIVE INFO": ["weather", "news", "cricket", "petrol", "gold", "currency", "define"],
+                "🎉 FUN": ["truthordare", "compatibility", "riddle", "poll"],
+                "🛠️ UTILITY": ["qr", "calc", "remind", "clearchat"],
+                "👥 GROUP TOOLS": ["tagall", "kick", "antilink", "antidelete", "antiviewonce", "antibadword"],
+                "👑 OWNER": ["ban", "unban", "banlist", "block", "unblock", "sudo", "delsudo", "listsudo", "mode", "autoread", "broadcast"],
                 "⚙️ SETTINGS": [
-                    "welcome", "goodbye", "setwelcome", "setgoodbye", "antilink", "antidelete", "antiviewonce",
+                    "welcome", "goodbye", "setwelcome", "setgoodbye",
                     "editpath", "recording", "autotyping", "online", "autoreact", "anticall",
                     "anticallmsg", "adminaction", "statuslike", "prefix", "botname", "ownername",
                     "ownernumber", "description", "stickername", "settings",
                 ],
-                "🏠 MAIN": ["ping", "help", "alive", "owner", "repo", "developer", "broadcast"],
+                "🏠 MAIN": ["ping", "help", "alive", "owner", "repo", "developer"],
             };
 
-            let menu = `━━━━━━ 🤖 ʙᴏᴛ ɪɴғᴏ ━━━━━━\n`;
-            menu += `◉ 🎉 ${config.BOT_NAME || "Tasmee-Ai-Bot"}\n`;
-            menu += `◉ 👑 ᴏᴡɴᴇʀ: ${config.OWNER_NAME || "Tasmee"}\n`;
-            menu += `◉ 📜 ᴄᴏᴍᴍᴀɴᴅs: ${allCommands.length}\n`;
-            menu += `◉ ⏱️ ʀᴜɴᴛɪᴍᴇ: ${mins}m ${secs}s\n`;
-            menu += `◉ 📦 ᴘʀᴇғɪx: ${config.PREFIX || "."}\n`;
-            menu += `◉ ⚙️ ᴍᴏᴅᴇ: ${config.MODE || "public"}\n`;
-            menu += `◉ 🏷️ ᴠᴇʀsɪᴏɴ: 1.0.0\n`;
-            menu += `◉ 📱 ᴏᴡɴᴇʀ ᴄᴏɴᴛᴀᴄᴛ: ${config.OWNER_NUMBER || "N/A"}\n`;
+            let menu = `╔═══════════════════╗\n`;
+            menu += `   🚀 *${config.BOT_NAME || "Tasmee-Ai-Bot"}* 🚀\n`;
+            menu += `╚═══════════════════╝\n\n`;
+            menu += `👑 ᴏᴡɴᴇʀ: ${config.OWNER_NAME || "Tasmee"}\n`;
+            menu += `📜 ᴄᴏᴍᴍᴀɴᴅs: ${allCommands.length}\n`;
+            menu += `⏱️ ᴜᴘᴛɪᴍᴇ: ${mins}m ${secs}s\n`;
+            menu += `📦 ᴘʀᴇғɪx: ${config.PREFIX || "."}\n`;
+            menu += `⚙️ ᴍᴏᴅᴇ: ${config.MODE || "public"}\n`;
+            menu += `🧠 ᴀɪ ᴇɴɢɪɴᴇ: Groq — Llama 3.3 (70B)\n`;
+            menu += `🏷️ ᴠᴇʀsɪᴏɴ: 2.0 — Advanced\n`;
+            menu += `📱 ᴏᴡɴᴇʀ ᴄᴏɴᴛᴀᴄᴛ: wa.me/${config.OWNER_NUMBER || "N/A"}\n`;
+            menu += `\n─────────────────────`;
 
             const prefix = config.PREFIX || ".";
             for (const [category, cmdNames] of Object.entries(categories)) {
-                menu += `\n╭─「 ${category} 」\n`;
+                menu += `\n\n▣ ${category}\n`;
                 for (const cmdName of cmdNames) {
                     const cmd = allCommands.find((c) => c.name === cmdName);
                     if (!cmd) continue;
                     const aliasText = cmd.aliases && cmd.aliases.length ? ` (${cmd.aliases.map((a) => `${prefix}${a}`).join(", ")})` : "";
-                    menu += `│ ◈ ${prefix}${cmd.name}${aliasText}\n`;
+                    menu += `  ➤ ${prefix}${cmd.name}${aliasText}\n`;
                 }
-                menu += `╰────────────\n`;
             }
 
-            menu += `\n🤝 Main aapki madad karne ke liye yahan hoon!`;
+            menu += `\n─────────────────────`;
+            menu += `\n🤝 Main 24/7 aapki madad ke liye yahan hoon!`;
             menu += `\n©️ ᴘᴏᴡᴇʀᴇᴅ ʙʏ ${config.OWNER_NAME || "Tasmee ul Hasnain"}`;
 
             if (config.MENU_IMAGE_URL) {
@@ -722,13 +742,27 @@ const allCommands = [
     {
         name: "alive",
         aliases: [],
-        description: "Check if bot is alive with uptime info",
+        description: "Check if bot is alive with uptime + system info",
         async execute(sock, { from, config }) {
             const uptimeSec = Math.floor(process.uptime());
-            const mins = Math.floor(uptimeSec / 60);
+            const hrs = Math.floor(uptimeSec / 3600);
+            const mins = Math.floor((uptimeSec % 3600) / 60);
             const secs = uptimeSec % 60;
-            await sock.sendMessage(from, {
-                text: `✅ ${config.BOT_NAME || "Tasmee-Ai-Bot"} is alive!\n⏱️ Uptime: ${mins}m ${secs}s`,
+            const memMB = (process.memoryUsage().rss / 1024 / 1024).toFixed(1);
+            const text =
+                `⚡ *${config.BOT_NAME || "Tasmee-Ai-Bot"}* — ONLINE\n\n` +
+                `🟢 Status: Active & Running\n` +
+                `⏱️ Uptime: ${hrs}h ${mins}m ${secs}s\n` +
+                `🧠 AI Engine: Groq (Llama 3.3 70B)\n` +
+                `💾 Memory: ${memMB} MB\n` +
+                `📦 Node.js: ${process.version}\n` +
+                `🏷️ Version: 2.0 — Advanced\n\n` +
+                `_Sab systems normal — kuch bhi pooch sakte hain!_`;
+            const content = config.MENU_IMAGE_URL
+                ? { image: { url: config.MENU_IMAGE_URL }, caption: text }
+                : { text };
+            await sock.sendMessage(from, content).catch(async () => {
+                await sock.sendMessage(from, { text });
             });
         },
     },
@@ -1139,6 +1173,20 @@ const allCommands = [
                 await new Promise((r) => setTimeout(r, 1500)); // small delay to avoid spam-flagging
             }
             await sock.sendMessage(from, { text: `✅ Broadcast bhej diya ${sent}/${groupIds.length} group(s) mein.` });
+        },
+    },
+    {
+        name: "antibadword",
+        aliases: ["antibad"],
+        description: "Toggle auto-deleting messages with bad words (edit data/badwords.json to set the word list)",
+        async execute(sock, { from, args, config, msg }) {
+            if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
+            const choice = args[0]?.toLowerCase();
+            if (choice !== "on" && choice !== "off") {
+                return sock.sendMessage(from, { text: `Current: *${config.ANTI_BAD_WORD === "true" ? "ON" : "OFF"}*\n\nUsage: .antibadword on/off\nWord list: data/badwords.json (empty by default — add words there).` });
+            }
+            updateConfig(config, "ANTI_BAD_WORD", choice === "on" ? "true" : "false");
+            await sock.sendMessage(from, { text: `✅ Anti bad-word is now *${choice.toUpperCase()}*.` });
         },
     },
     {
@@ -1657,6 +1705,541 @@ const allCommands = [
                     `👨‍💻 *Tasmee ul Hasnain*\n` +
                     `📞 wa.me/923423899407`,
             }, { quoted: msg });
+        },
+    },
+
+    // ============================================
+    // Islamic / prayer utilities
+    // ============================================
+    {
+        name: "prayertimes",
+        aliases: ["namaz", "salah"],
+        description: "Namaz ke aaj ke timings. Usage: .namaz <city>",
+        async execute(sock, { from, args, msg }) {
+            const city = args.join(" ").trim() || "Faisalabad";
+            try {
+                const res = await fetch(`https://api.aladhan.com/v1/timingsByCity?city=${encodeURIComponent(city)}&country=Pakistan&method=1`);
+                const data = await res.json();
+                const t = data?.data?.timings;
+                if (!t) throw new Error("Timings nahi mile.");
+                const text =
+                    `🕌 *Namaz Timings — ${city}*\n\n` +
+                    `🌅 Fajr: ${t.Fajr}\n` +
+                    `☀️ Zuhr: ${t.Dhuhr}\n` +
+                    `🌤️ Asr: ${t.Asr}\n` +
+                    `🌇 Maghrib: ${t.Maghrib}\n` +
+                    `🌙 Isha: ${t.Isha}\n\n` +
+                    `📅 ${data.data.date?.readable || ""}`;
+                await sock.sendMessage(from, { text }, { quoted: msg });
+            } catch (err) {
+                await sock.sendMessage(from, { text: `❌ Namaz timings nahi mil sake: ${err.message}` }, { quoted: msg });
+            }
+        },
+    },
+    {
+        name: "qibla",
+        aliases: [],
+        description: "Qibla ki direction. Usage: .qibla <city>",
+        async execute(sock, { from, args, msg }) {
+            const city = args.join(" ").trim() || "Faisalabad";
+            try {
+                const geoRes = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=en&format=json`);
+                const geoData = await geoRes.json();
+                const place = geoData.results?.[0];
+                if (!place) throw new Error(`"${city}" nahi mila.`);
+                const qRes = await fetch(`https://api.aladhan.com/v1/qibla/${place.latitude}/${place.longitude}`);
+                const qData = await qRes.json();
+                const direction = qData?.data?.direction;
+                if (direction === undefined) throw new Error("Qibla direction nahi mili.");
+                await sock.sendMessage(from, {
+                    text: `🕋 *Qibla Direction — ${place.name}*\n\n📐 ${direction.toFixed(1)}° (North se, clockwise)\n\nCompass app mein ye angle set karein.`,
+                }, { quoted: msg });
+            } catch (err) {
+                await sock.sendMessage(from, { text: `❌ ${err.message}` }, { quoted: msg });
+            }
+        },
+    },
+    {
+        name: "hijri",
+        aliases: ["islamicdate"],
+        description: "Aaj ki Hijri/Islamic tareekh",
+        async execute(sock, { from, msg }) {
+            try {
+                const now = new Date();
+                const dd = String(now.getDate()).padStart(2, "0");
+                const mm = String(now.getMonth() + 1).padStart(2, "0");
+                const yyyy = now.getFullYear();
+                const res = await fetch(`https://api.aladhan.com/v1/gToH?date=${dd}-${mm}-${yyyy}`);
+                const data = await res.json();
+                const h = data?.data?.hijri;
+                if (!h) throw new Error("Hijri date nahi mili.");
+                await sock.sendMessage(from, {
+                    text: `📅 *Aaj ki Islamic Tareekh*\n\n${h.day} ${h.month?.en} ${h.year} AH\n(${h.weekday?.en})`,
+                }, { quoted: msg });
+            } catch (err) {
+                await sock.sendMessage(from, { text: `❌ ${err.message}` }, { quoted: msg });
+            }
+        },
+    },
+
+    // ============================================
+    // Group management
+    // ============================================
+    {
+        name: "tagall",
+        aliases: ["everyone"],
+        description: "Group ke sab members ko tag karein (admin only). Usage: .tagall [message]",
+        async execute(sock, { from, args, isGroup, msg, config }) {
+            if (!isGroup) return sock.sendMessage(from, { text: "❌ Sirf groups mein kaam karta hai." });
+            const senderJid = msg.key.participant || from;
+            const meta = await sock.groupMetadata(from).catch(() => null);
+            if (!meta) return sock.sendMessage(from, { text: "❌ Group info nahi mil saki." });
+            const senderParticipant = meta.participants.find((p) => p.id === senderJid);
+            const senderIsAdmin = senderParticipant?.admin === "admin" || senderParticipant?.admin === "superadmin";
+            if (!senderIsAdmin && !isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Sirf group admins ye command use kar sakte hain." });
+
+            const message = args.join(" ").trim() || "📢 Attention everyone!";
+            const mentions = meta.participants.map((p) => p.id);
+            const mentionText = mentions.map((id) => `@${id.split("@")[0]}`).join(" ");
+            await sock.sendMessage(from, { text: `${message}\n\n${mentionText}`, mentions });
+        },
+    },
+    {
+        name: "kick",
+        aliases: ["remove"],
+        description: "Group se member remove karein (admin only, reply karein us member ke message pe)",
+        async execute(sock, { from, args, isGroup, msg, config }) {
+            if (!isGroup) return sock.sendMessage(from, { text: "❌ Sirf groups mein kaam karta hai." });
+            const senderJid = msg.key.participant || from;
+            const meta = await sock.groupMetadata(from).catch(() => null);
+            if (!meta) return sock.sendMessage(from, { text: "❌ Group info nahi mil saki." });
+            const senderParticipant = meta.participants.find((p) => p.id === senderJid);
+            const senderIsAdmin = senderParticipant?.admin === "admin" || senderParticipant?.admin === "superadmin";
+            if (!senderIsAdmin && !isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Sirf group admins ye command use kar sakte hain." });
+
+            let targetJid = msg.message?.extendedTextMessage?.contextInfo?.participant;
+            if (!targetJid && args[0]) targetJid = args[0].replace(/[^0-9]/g, "") + "@s.whatsapp.net";
+            if (!targetJid) return sock.sendMessage(from, { text: "❓ Kis ko remove karna hai? Us ke message pe reply karein ya number dein." });
+
+            try {
+                await sock.groupParticipantsUpdate(from, [targetJid], "remove");
+                await sock.sendMessage(from, { text: `✅ Member remove kar diya.` });
+            } catch (err) {
+                await sock.sendMessage(from, { text: `❌ Remove nahi ho saka (bot ko group admin banayein): ${err.message}` });
+            }
+        },
+    },
+
+    // ============================================
+    // AI-assisted utilities
+    // ============================================
+    {
+        name: "clearchat",
+        aliases: ["resetai", "forget"],
+        description: "Is chat ki AI memory reset karein",
+        async execute(sock, { from, msg }) {
+            memory.forget(from);
+            await sock.sendMessage(from, { text: "🧹 AI memory clear kar di is chat ki — naye sirey se baat karte hain!" }, { quoted: msg });
+        },
+    },
+    {
+        name: "translate",
+        aliases: ["tr"],
+        description: "Text translate karein. Usage: .translate <language> <text>",
+        async execute(sock, { from, args, msg }) {
+            if (groq.getKeys().length === 0) return sock.sendMessage(from, { text: "⚠️ API key not set." });
+            const targetLang = args[0];
+            const text = args.slice(1).join(" ");
+            if (!targetLang || !text) return sock.sendMessage(from, { text: "Usage: .translate <language> <text>\nExample: .translate english mera naam ali hai" });
+            try {
+                const data = await groq.groqChatWithFallback({
+                    model: "llama-3.3-70b-versatile",
+                    messages: [
+                        { role: "system", content: `Translate the user's text into ${targetLang}. Reply with ONLY the translation, nothing else.` },
+                        { role: "user", content: text },
+                    ],
+                });
+                const translated = data.choices?.[0]?.message?.content;
+                await sock.sendMessage(from, { text: `🌐 ${translated || "Translate nahi ho saka."}` }, { quoted: msg });
+            } catch (err) {
+                await sock.sendMessage(from, { text: `❌ ${err.message}` }, { quoted: msg });
+            }
+        },
+    },
+    {
+        name: "shayari",
+        aliases: ["poetry"],
+        description: "AI se Urdu shayari. Usage: .shayari [topic]",
+        async execute(sock, { from, args, msg }) {
+            if (groq.getKeys().length === 0) return sock.sendMessage(from, { text: "⚠️ API key not set." });
+            const topic = args.join(" ").trim() || "mohabbat";
+            try {
+                const data = await groq.groqChatWithFallback({
+                    model: "llama-3.3-70b-versatile",
+                    messages: [
+                        { role: "system", content: "You write short, beautiful 2-4 line Urdu shayari in Roman Urdu script. Reply with ONLY the shayari, nothing else." },
+                        { role: "user", content: `Shayari likho "${topic}" ke topic par.` },
+                    ],
+                });
+                const shayari = data.choices?.[0]?.message?.content;
+                await sock.sendMessage(from, { text: `✨ ${shayari || "Shayari nahi ban saki."}` }, { quoted: msg });
+            } catch (err) {
+                await sock.sendMessage(from, { text: `❌ ${err.message}` }, { quoted: msg });
+            }
+        },
+    },
+    {
+        name: "joke",
+        aliases: ["lateefa"],
+        description: "Ek random joke",
+        async execute(sock, { from, msg }) {
+            if (groq.getKeys().length === 0) return sock.sendMessage(from, { text: "⚠️ API key not set." });
+            try {
+                const data = await groq.groqChatWithFallback({
+                    model: "llama-3.3-70b-versatile",
+                    messages: [
+                        { role: "system", content: "Tell one short, clean, funny joke in Roman Urdu/English mix. Reply with ONLY the joke." },
+                        { role: "user", content: "Ek joke sunao." },
+                    ],
+                });
+                const joke = data.choices?.[0]?.message?.content;
+                await sock.sendMessage(from, { text: `😂 ${joke || "Joke nahi soch saka abhi."}` }, { quoted: msg });
+            } catch (err) {
+                await sock.sendMessage(from, { text: `❌ ${err.message}` }, { quoted: msg });
+            }
+        },
+    },
+    {
+        name: "quote",
+        aliases: ["motivation"],
+        description: "Motivational ya Islamic quote",
+        async execute(sock, { from, msg }) {
+            if (groq.getKeys().length === 0) return sock.sendMessage(from, { text: "⚠️ API key not set." });
+            try {
+                const data = await groq.groqChatWithFallback({
+                    model: "llama-3.3-70b-versatile",
+                    messages: [
+                        { role: "system", content: "Share one short motivational quote (Islamic wisdom or general life advice) in Roman Urdu or English. Reply with ONLY the quote." },
+                        { role: "user", content: "Aaj ka ek quote do." },
+                    ],
+                });
+                const quote = data.choices?.[0]?.message?.content;
+                await sock.sendMessage(from, { text: `💭 ${quote || "Quote nahi mil saka."}` }, { quoted: msg });
+            } catch (err) {
+                await sock.sendMessage(from, { text: `❌ ${err.message}` }, { quoted: msg });
+            }
+        },
+    },
+
+    // ============================================
+    // Fun / entertainment
+    // ============================================
+    {
+        name: "truthordare",
+        aliases: ["tod"],
+        description: "Truth ya dare khelein. Usage: .truthordare [truth|dare]",
+        async execute(sock, { from, args, msg }) {
+            const truths = [
+                "Aapki sabse embarrassing memory kya hai?",
+                "Kisi se jhoot bola ho recently, kya tha?",
+                "Aapka crush kaun hai (ya tha)?",
+                "Aapki sabse buri aadat kya hai?",
+            ];
+            const dares = [
+                "Apni akhri message zor se parh kar sunayein.",
+                "Ek minute tak bina hansay rahein.",
+                "Group ke kisi member ko abhi ek compliment dein.",
+                "Apni voice mein ek gaana ga kar bhejein.",
+            ];
+            const choice = args[0]?.toLowerCase();
+            const pick =
+                choice === "dare" ? dares[Math.floor(Math.random() * dares.length)]
+                : choice === "truth" ? truths[Math.floor(Math.random() * truths.length)]
+                : Math.random() > 0.5 ? `TRUTH: ${truths[Math.floor(Math.random() * truths.length)]}`
+                : `DARE: ${dares[Math.floor(Math.random() * dares.length)]}`;
+            await sock.sendMessage(from, { text: `🎲 ${pick}` }, { quoted: msg });
+        },
+    },
+    {
+        name: "compatibility",
+        aliases: ["lovemeter"],
+        description: "Fun love compatibility (sirf timepass!). Usage: .compatibility <naam1> <naam2>",
+        async execute(sock, { from, args, msg }) {
+            if (args.length < 2) return sock.sendMessage(from, { text: "Usage: .compatibility Ali Sara" });
+            const [name1, name2] = args;
+            const combined = (name1 + name2).toLowerCase();
+            let hash = 0;
+            for (let i = 0; i < combined.length; i++) hash = (hash * 31 + combined.charCodeAt(i)) % 101;
+            const bar = "█".repeat(Math.round(hash / 10)) + "░".repeat(10 - Math.round(hash / 10));
+            await sock.sendMessage(from, { text: `💘 *${name1} + ${name2}*\n\n${bar} ${hash}%\n\n(Sirf timepass ke liye! 😄)` }, { quoted: msg });
+        },
+    },
+    {
+        name: "riddle",
+        aliases: ["paheli"],
+        description: "Ek random riddle/paheli",
+        async execute(sock, { from, msg }) {
+            const riddles = [
+                { q: "Woh kya cheez hai jo bolti hai lekin muh nahi hai?", a: "Echo (Awaz ki goonj)" },
+                { q: "Jo cheez jitni zyada nikaali jaye, utna bara gaddha ban jata hai. Kya hai wo?", a: "Kuwan (Well)" },
+                { q: "Do behnain hain, ek dusri ko dekhti nahi. Kaun hain?", a: "Aankhein" },
+                { q: "Woh kya hai jo raat ko aata hai bina bulaye, aur din mein chala jata hai bina kahe?", a: "Sitaray" },
+            ];
+            const pick = riddles[Math.floor(Math.random() * riddles.length)];
+            await sock.sendMessage(from, { text: `🧩 *Paheli:*\n${pick.q}\n\n_Jawab: reply karein ".riddle answer" — ya khud sochein!_` }, { quoted: msg });
+        },
+    },
+
+    // ============================================
+    // Utilities
+    // ============================================
+    {
+        name: "currency",
+        aliases: ["convert", "exchangerate"],
+        description: "Currency convert karein. Usage: .currency <amount> <from> <to>",
+        async execute(sock, { from, args, msg }) {
+            const [amountStr, fromCur, toCur] = args;
+            const amount = parseFloat(amountStr);
+            if (!amount || !fromCur || !toCur) return sock.sendMessage(from, { text: "Usage: .currency 100 USD PKR" });
+            try {
+                const res = await fetch(`https://api.exchangerate-api.com/v4/latest/${fromCur.toUpperCase()}`);
+                const data = await res.json();
+                const rate = data?.rates?.[toCur.toUpperCase()];
+                if (!rate) throw new Error("Currency code galat hai ya rate nahi mila.");
+                const result = (amount * rate).toFixed(2);
+                await sock.sendMessage(from, { text: `💱 ${amount} ${fromCur.toUpperCase()} = *${result} ${toCur.toUpperCase()}*` }, { quoted: msg });
+            } catch (err) {
+                await sock.sendMessage(from, { text: `❌ ${err.message}` }, { quoted: msg });
+            }
+        },
+    },
+    {
+        name: "qr",
+        aliases: ["qrcode"],
+        description: "QR code banayein. Usage: .qr <text/link>",
+        async execute(sock, { from, args, msg }) {
+            const text = args.join(" ").trim();
+            if (!text) return sock.sendMessage(from, { text: "Usage: .qr <text ya link>" });
+            const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(text)}`;
+            await sock.sendMessage(from, { image: { url: qrUrl }, caption: `📱 QR Code: ${text}` }, { quoted: msg });
+        },
+    },
+    {
+        name: "calc",
+        aliases: ["calculate"],
+        description: "Calculator. Usage: .calc 25*4+10",
+        async execute(sock, { from, args, msg }) {
+            const expr = args.join(" ");
+            if (!expr) return sock.sendMessage(from, { text: "Usage: .calc 25*4+10" });
+            if (!/^[0-9+\-*/().\s%]+$/.test(expr)) {
+                return sock.sendMessage(from, { text: "❌ Sirf numbers aur + - * / ( ) use karein." }, { quoted: msg });
+            }
+            try {
+                const result = Function(`"use strict"; return (${expr})`)();
+                await sock.sendMessage(from, { text: `🧮 ${expr} = *${result}*` }, { quoted: msg });
+            } catch {
+                await sock.sendMessage(from, { text: "❌ Expression samajh nahi aayi." }, { quoted: msg });
+            }
+        },
+    },
+    {
+        name: "remind",
+        aliases: ["reminder"],
+        description: "Reminder set karein. Usage: .remind <minutes> <message>",
+        async execute(sock, { from, args, msg }) {
+            const minutes = parseFloat(args[0]);
+            const message = args.slice(1).join(" ");
+            if (!minutes || minutes <= 0 || !message) return sock.sendMessage(from, { text: "Usage: .remind 30 namaz ka waqt ho gaya" });
+            if (minutes > 1440) return sock.sendMessage(from, { text: "❌ Max 1440 minutes (24 ghante) tak ka reminder set kar sakte hain." });
+            await sock.sendMessage(from, { text: `⏰ Theek hai, ${minutes} minute mein yaad dila dunga: "${message}"` }, { quoted: msg });
+            setTimeout(() => {
+                sock.sendMessage(from, { text: `⏰ *Reminder:* ${message}` }).catch(() => {});
+            }, minutes * 60 * 1000);
+        },
+    },
+    {
+        name: "poll",
+        aliases: ["vote"],
+        description: "Poll banayein. Usage: .poll Question | Option1 | Option2",
+        async execute(sock, { from, text, msg }) {
+            const body = text.slice(text.indexOf(" ") + 1);
+            const parts = body.split("|").map((p) => p.trim()).filter(Boolean);
+            if (parts.length < 3) return sock.sendMessage(from, { text: "Usage: .poll Question | Option1 | Option2\nExample: .poll Lunch kahan karein? | Pizza | Biryani | BBQ" }, { quoted: msg });
+            const [question, ...options] = parts;
+            await sock.sendMessage(from, { poll: { name: question, values: options.slice(0, 12), selectableCount: 1 } });
+        },
+    },
+    {
+        name: "define",
+        aliases: ["dictionary", "meaning"],
+        description: "English word ka meaning. Usage: .define <word>",
+        async execute(sock, { from, args, msg }) {
+            const word = args[0];
+            if (!word) return sock.sendMessage(from, { text: "Usage: .define <word>" });
+            try {
+                const res = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`);
+                const data = await res.json();
+                if (!Array.isArray(data)) throw new Error("Word nahi mila.");
+                const entry = data[0];
+                const meaning = entry.meanings?.[0];
+                const def = meaning?.definitions?.[0];
+                const text = `📖 *${entry.word}* (${meaning?.partOfSpeech || ""})\n\n${def?.definition || "Definition nahi mili."}` +
+                    (def?.example ? `\n\n_Example: ${def.example}_` : "");
+                await sock.sendMessage(from, { text }, { quoted: msg });
+            } catch {
+                await sock.sendMessage(from, { text: `❌ "${word}" ka meaning nahi mila.` }, { quoted: msg });
+            }
+        },
+    },
+    {
+        name: "toimg",
+        aliases: ["take"],
+        description: "Sticker ko wapas image mein convert karein (sticker pe reply karein)",
+        async execute(sock, { from, msg }) {
+            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            const targetMsg = quoted ? { message: quoted, key: msg.key } : msg;
+            if (!targetMsg.message?.stickerMessage) return sock.sendMessage(from, { text: "❌ Kisi sticker pe reply karein *.toimg* ke sath." });
+            try {
+                const buffer = await downloadMediaMessage(targetMsg, "buffer", {});
+                await sock.sendMessage(from, { image: buffer, caption: "✅ Converted!" }, { quoted: msg });
+            } catch (err) {
+                await sock.sendMessage(from, { text: `❌ Convert nahi ho saka: ${err.message}` }, { quoted: msg });
+            }
+        },
+    },
+    {
+        name: "statusdl",
+        aliases: ["savestatus"],
+        description: "Kisi forward hui status ko save karein — us message pe reply karein",
+        async execute(sock, { from, msg }) {
+            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            if (!quoted) return sock.sendMessage(from, { text: "❓ Status wale message pe reply karein *.statusdl* ke sath." });
+            const targetMsg = { message: quoted, key: msg.key };
+            try {
+                const buffer = await downloadMediaMessage(targetMsg, "buffer", {});
+                if (quoted.imageMessage) {
+                    await sock.sendMessage(from, { image: buffer, caption: "✅ Status saved!" }, { quoted: msg });
+                } else if (quoted.videoMessage) {
+                    await sock.sendMessage(from, { video: buffer, caption: "✅ Status saved!" }, { quoted: msg });
+                } else {
+                    await sock.sendMessage(from, { text: "❌ Ye media type support nahi hoti." }, { quoted: msg });
+                }
+            } catch (err) {
+                await sock.sendMessage(from, { text: `❌ Save nahi ho saka: ${err.message}` }, { quoted: msg });
+            }
+        },
+    },
+
+    // ============================================
+    // Social media downloaders (best-effort — please test these live;
+    // third-party download APIs occasionally change their response format)
+    // ============================================
+    {
+        name: "instagram",
+        aliases: ["ig", "insta"],
+        description: "Instagram reel/post download karein. Usage: .instagram <link>",
+        async execute(sock, { from, args, msg }) {
+            const url = args[0];
+            if (!url || !url.includes("instagram.com")) return sock.sendMessage(from, { text: "❌ Valid Instagram link dein." });
+            await sock.sendMessage(from, { text: "⏳ Downloading..." });
+            try {
+                const mediaUrl = await cobaltDownload(url);
+                if (!mediaUrl) throw new Error("Media nahi mila.");
+                await sock.sendMessage(from, { video: { url: mediaUrl }, caption: "📸 Instagram" }, { quoted: msg });
+            } catch (err) {
+                await sock.sendMessage(from, { text: `❌ Failed: ${err.message}` }, { quoted: msg });
+            }
+        },
+    },
+    {
+        name: "facebook",
+        aliases: ["fb"],
+        description: "Facebook video download karein. Usage: .facebook <link>",
+        async execute(sock, { from, args, msg }) {
+            const url = args[0];
+            if (!url || (!url.includes("facebook.com") && !url.includes("fb.watch"))) return sock.sendMessage(from, { text: "❌ Valid Facebook link dein." });
+            await sock.sendMessage(from, { text: "⏳ Downloading..." });
+            try {
+                const mediaUrl = await cobaltDownload(url);
+                if (!mediaUrl) throw new Error("Media nahi mila.");
+                await sock.sendMessage(from, { video: { url: mediaUrl }, caption: "📘 Facebook" }, { quoted: msg });
+            } catch (err) {
+                await sock.sendMessage(from, { text: `❌ Failed: ${err.message}` }, { quoted: msg });
+            }
+        },
+    },
+    {
+        name: "twitter",
+        aliases: ["x"],
+        description: "Twitter/X video download karein. Usage: .twitter <link>",
+        async execute(sock, { from, args, msg }) {
+            const url = args[0];
+            if (!url || (!url.includes("twitter.com") && !url.includes("x.com"))) return sock.sendMessage(from, { text: "❌ Valid Twitter/X link dein." });
+            await sock.sendMessage(from, { text: "⏳ Downloading..." });
+            try {
+                const mediaUrl = await cobaltDownload(url);
+                if (!mediaUrl) throw new Error("Media nahi mila.");
+                await sock.sendMessage(from, { video: { url: mediaUrl }, caption: "🐦 Twitter/X" }, { quoted: msg });
+            } catch (err) {
+                await sock.sendMessage(from, { text: `❌ Failed: ${err.message}` }, { quoted: msg });
+            }
+        },
+    },
+
+    // ============================================
+    // Informative (news-based, no AI tokens spent)
+    // ============================================
+    {
+        name: "cricket",
+        aliases: ["score"],
+        description: "Latest cricket score/news",
+        async execute(sock, { from, args, msg }) {
+            const query = args.join(" ").trim() || "Pakistan cricket score";
+            try {
+                const res = await fetch(`https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-PK&gl=PK&ceid=PK:en`);
+                const xml = await res.text();
+                const items = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)].slice(0, 5);
+                if (items.length === 0) return sock.sendMessage(from, { text: "❌ Koi score/news nahi mili." }, { quoted: msg });
+                const decode = (s) => (s || "").replace(/<!\[CDATA\[/g, "").replace(/\]\]>/g, "").replace(/&amp;/g, "&").replace(/&#39;/g, "'").replace(/&quot;/g, '"');
+                const lines = items.map((m) => `🏏 ${decode(m[1].match(/<title>(.*?)<\/title>/)?.[1] || "")}`);
+                await sock.sendMessage(from, { text: `🏏 *Cricket Updates*\n\n${lines.join("\n\n")}` }, { quoted: msg });
+            } catch (err) {
+                await sock.sendMessage(from, { text: `❌ ${err.message}` }, { quoted: msg });
+            }
+        },
+    },
+    {
+        name: "petrol",
+        aliases: ["fuelprice"],
+        description: "Pakistan mein aaj ki petrol/diesel price news",
+        async execute(sock, { from, msg }) {
+            try {
+                const res = await fetch(`https://news.google.com/rss/search?q=petrol+price+pakistan&hl=en-PK&gl=PK&ceid=PK:en`);
+                const xml = await res.text();
+                const items = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)].slice(0, 4);
+                const decode = (s) => (s || "").replace(/<!\[CDATA\[/g, "").replace(/\]\]>/g, "").replace(/&amp;/g, "&").replace(/&#39;/g, "'").replace(/&quot;/g, '"');
+                const lines = items.map((m) => `⛽ ${decode(m[1].match(/<title>(.*?)<\/title>/)?.[1] || "")}`);
+                await sock.sendMessage(from, { text: `⛽ *Petrol Price Updates*\n\n${lines.join("\n\n") || "Nahi mili."}\n\n_(Ye news headlines hain — exact rate confirm kar lein.)_` }, { quoted: msg });
+            } catch (err) {
+                await sock.sendMessage(from, { text: `❌ ${err.message}` }, { quoted: msg });
+            }
+        },
+    },
+    {
+        name: "gold",
+        aliases: ["goldrate"],
+        description: "Pakistan mein aaj ka gold rate news",
+        async execute(sock, { from, msg }) {
+            try {
+                const res = await fetch(`https://news.google.com/rss/search?q=gold+rate+pakistan+today&hl=en-PK&gl=PK&ceid=PK:en`);
+                const xml = await res.text();
+                const items = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)].slice(0, 4);
+                const decode = (s) => (s || "").replace(/<!\[CDATA\[/g, "").replace(/\]\]>/g, "").replace(/&amp;/g, "&").replace(/&#39;/g, "'").replace(/&quot;/g, '"');
+                const lines = items.map((m) => `🪙 ${decode(m[1].match(/<title>(.*?)<\/title>/)?.[1] || "")}`);
+                await sock.sendMessage(from, { text: `🪙 *Gold Rate Updates*\n\n${lines.join("\n\n") || "Nahi mila."}\n\n_(Ye news headlines hain — exact rate confirm kar lein.)_` }, { quoted: msg });
+            } catch (err) {
+                await sock.sendMessage(from, { text: `❌ ${err.message}` }, { quoted: msg });
+            }
         },
     },
 ];
