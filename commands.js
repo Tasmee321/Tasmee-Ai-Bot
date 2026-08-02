@@ -9,6 +9,20 @@ const fs = require("fs");
 const path = require("path");
 const memory = require("./lib/memory");
 const groq = require("./lib/groq");
+const { setConfig: persistConfig } = require("./lib/configdb");
+
+// Every toggle/setting command below should use this instead of a plain
+// `config.X = Y` assignment — it updates the in-memory config the bot is
+// using right now AND writes it to data/config.json, so the setting
+// survives a restart/crash instead of silently resetting to the default.
+function updateConfig(config, key, value) {
+    config[key] = value;
+    try {
+        persistConfig(key, value);
+    } catch (err) {
+        console.log(`⚠️ Failed to persist config.${key}:`, err.message);
+    }
+}
 
 const fetch = global.fetch;
 
@@ -545,6 +559,39 @@ async function runAiTool(sock, { from, msg, config }, toolName, toolArgs) {
 // WhatsApp message directly), then asks the model for one short natural
 // closing reply. Returns that closing reply string, or a plain answer
 // string if no tool was called, or null on failure.
+const KNOWN_TOOL_NAMES = [
+    "download_media", "find_or_generate_image", "text_to_voice", "stylish_text_image",
+    "get_weather", "get_news", "pinterest_images", "web_search",
+];
+
+// Some models occasionally print a fake/malformed function-call as plain
+// text instead of using the real tool_calls field, e.g.:
+//   </function>download_media>{"format": "audio", "query": "Pal pal"}<function>
+//   Text_to_voice: "Kya haal hai"
+// This tries to recognise that pattern and recover the intended tool call
+// instead of showing the garbled text straight to the user.
+function parseMalformedToolCall(text) {
+    if (!text) return null;
+    for (const toolName of KNOWN_TOOL_NAMES) {
+        const escaped = toolName.replace(/_/g, "[_ ]?");
+        const jsonPattern = new RegExp(`${escaped}\\s*[:>]?\\s*(\\{[^}]*\\})`, "i");
+        const jsonMatch = text.match(jsonPattern);
+        if (jsonMatch) {
+            try {
+                return { name: toolName, args: JSON.parse(jsonMatch[1]) };
+            } catch {}
+        }
+        // Simpler form: `text_to_voice: "some text"` (no JSON object at all)
+        const plainPattern = new RegExp(`${escaped}\\s*[:>]\\s*"([^"]+)"`, "i");
+        const plainMatch = text.match(plainPattern);
+        if (plainMatch) {
+            const key = toolName === "text_to_voice" ? "text" : toolName === "download_media" ? "query" : "query";
+            return { name: toolName, args: { [key]: plainMatch[1] } };
+        }
+    }
+    return null;
+}
+
 async function chatWithTools(sock, { from, msg, config, systemPrompt, history, question }) {
     const baseMessages = [
         { role: "system", content: systemPrompt },
@@ -552,12 +599,17 @@ async function chatWithTools(sock, { from, msg, config, systemPrompt, history, q
         { role: "user", content: question },
     ];
 
-    const firstData = await groq.groqChat({ model: "llama-3.1-8b-instant", messages: baseMessages, tools: AI_TOOLS, tool_choice: "auto" });
+    const firstData = await groq.groqChatWithFallback({ model: "llama-3.3-70b-versatile", messages: baseMessages, tools: AI_TOOLS, tool_choice: "auto" });
 
     const choiceMsg = firstData.choices?.[0]?.message;
-    const toolCalls = choiceMsg?.tool_calls;
+    let toolCalls = choiceMsg?.tool_calls;
 
     if (!toolCalls || toolCalls.length === 0) {
+        const recovered = parseMalformedToolCall(choiceMsg?.content);
+        if (recovered) {
+            const resultText = await runAiTool(sock, { from, msg, config }, recovered.name, recovered.args);
+            return resultText || "✅ Ho gaya!";
+        }
         return choiceMsg?.content || null;
     }
 
@@ -569,8 +621,8 @@ async function chatWithTools(sock, { from, msg, config, systemPrompt, history, q
         toolResultMessages.push({ tool_call_id: call.id, role: "tool", name: call.function.name, content: resultText });
     }
 
-    const followData = await groq.groqChat({
-        model: "llama-3.1-8b-instant",
+    const followData = await groq.groqChatWithFallback({
+        model: "llama-3.3-70b-versatile",
         messages: [...baseMessages, choiceMsg, ...toolResultMessages],
     });
     return followData.choices?.[0]?.message?.content || "✅ Ho gaya!";
@@ -609,7 +661,7 @@ const allCommands = [
                     "anticallmsg", "adminaction", "statuslike", "prefix", "botname", "ownername",
                     "ownernumber", "description", "stickername", "settings",
                 ],
-                "🏠 MAIN": ["ping", "help", "alive", "owner", "repo", "developer"],
+                "🏠 MAIN": ["ping", "help", "alive", "owner", "repo", "developer", "broadcast"],
             };
 
             let menu = `━━━━━━ 🤖 ʙᴏᴛ ɪɴғᴏ ━━━━━━\n`;
@@ -685,9 +737,20 @@ const allCommands = [
         aliases: [],
         description: "Show the bot owner's contact",
         async execute(sock, { from, config }) {
-            const number = config.OWNER_NUMBER || "";
+            const number = (config.OWNER_NUMBER || "").replace(/[^0-9]/g, "");
+            const ownerName = config.OWNER_NAME || "Tasmee";
+            if (!number) {
+                await sock.sendMessage(from, { text: `👑 Owner: ${ownerName}` });
+                return;
+            }
+            const vcard =
+                `BEGIN:VCARD\n` +
+                `VERSION:3.0\n` +
+                `FN:${ownerName}\n` +
+                `TEL;type=CELL;type=VOICE;waid=${number}:+${number}\n` +
+                `END:VCARD`;
             await sock.sendMessage(from, {
-                text: `👑 Owner: ${config.OWNER_NAME || "Tasmee"}\n📞 Contact: wa.me/${number}`,
+                contacts: { displayName: ownerName, contacts: [{ vcard }] },
             });
         },
     },
@@ -713,7 +776,7 @@ const allCommands = [
                 });
                 return;
             }
-            config.WELCOME = choice === "on" ? "true" : "false";
+            updateConfig(config, "WELCOME", choice === "on" ? "true" : "false");
             await sock.sendMessage(from, { text: `✅ Goodbye messages are now *${choice.toUpperCase()}*.` });
         },
     },
@@ -733,7 +796,7 @@ const allCommands = [
                 });
                 return;
             }
-            config.MODE = choice;
+            updateConfig(config, "MODE", choice);
             await sock.sendMessage(from, { text: `✅ Bot mode set to *${choice}*.` });
         },
     },
@@ -753,7 +816,7 @@ const allCommands = [
                 });
                 return;
             }
-            config.READ_MESSAGE = choice === "on" ? "true" : "false";
+            updateConfig(config, "READ_MESSAGE", choice === "on" ? "true" : "false");
             await sock.sendMessage(from, { text: `✅ Auto-read is now *${choice.toUpperCase()}*.` });
         },
     },
@@ -967,7 +1030,7 @@ const allCommands = [
         async execute(sock, { from, args, config, msg }) {
             if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             if (!args[0]) return sock.sendMessage(from, { text: `Current prefix: *${config.PREFIX}*` });
-            config.PREFIX = args[0];
+            updateConfig(config, "PREFIX", args[0]);
             await sock.sendMessage(from, { text: `✅ Prefix changed to: *${args[0]}*` });
         },
     },
@@ -979,7 +1042,7 @@ const allCommands = [
             if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const name = args.join(" ");
             if (!name) return sock.sendMessage(from, { text: `Current bot name: *${config.BOT_NAME}*` });
-            config.BOT_NAME = name;
+            updateConfig(config, "BOT_NAME", name);
             await sock.sendMessage(from, { text: `✅ Bot name changed to: *${name}*` });
         },
     },
@@ -991,7 +1054,7 @@ const allCommands = [
             if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const name = args.join(" ");
             if (!name) return sock.sendMessage(from, { text: `Current owner name: *${config.OWNER_NAME}*` });
-            config.OWNER_NAME = name;
+            updateConfig(config, "OWNER_NAME", name);
             await sock.sendMessage(from, { text: `✅ Owner name changed to: *${name}*` });
         },
     },
@@ -1003,7 +1066,7 @@ const allCommands = [
             if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const number = args[0]?.replace(/[^0-9]/g, "");
             if (!number) return sock.sendMessage(from, { text: `Current owner number: *${config.OWNER_NUMBER}*` });
-            config.OWNER_NUMBER = number;
+            updateConfig(config, "OWNER_NUMBER", number);
             await sock.sendMessage(from, { text: `✅ Owner number updated.` });
         },
     },
@@ -1015,7 +1078,7 @@ const allCommands = [
             if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const desc = args.join(" ");
             if (!desc) return sock.sendMessage(from, { text: `Current description: *${config.DESCRIPTION}*` });
-            config.DESCRIPTION = desc;
+            updateConfig(config, "DESCRIPTION", desc);
             await sock.sendMessage(from, { text: `✅ Description updated.` });
         },
     },
@@ -1027,7 +1090,7 @@ const allCommands = [
             if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const name = args.join(" ");
             if (!name) return sock.sendMessage(from, { text: `Current sticker name: *${config.STICKER_NAME}*` });
-            config.STICKER_NAME = name;
+            updateConfig(config, "STICKER_NAME", name);
             await sock.sendMessage(from, { text: `✅ Sticker pack name updated.` });
         },
     },
@@ -1039,7 +1102,7 @@ const allCommands = [
             if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const text = args.join(" ");
             if (!text) return sock.sendMessage(from, { text: `Current: *${config.WELCOME_MSG || "(default)"}*` });
-            config.WELCOME_MSG = text;
+            updateConfig(config, "WELCOME_MSG", text);
             await sock.sendMessage(from, { text: `✅ Welcome message updated.` });
         },
     },
@@ -1051,8 +1114,31 @@ const allCommands = [
             if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const text = args.join(" ");
             if (!text) return sock.sendMessage(from, { text: `Current: *${config.GOODBYE_MSG || "(default)"}*` });
-            config.GOODBYE_MSG = text;
+            updateConfig(config, "GOODBYE_MSG", text);
             await sock.sendMessage(from, { text: `✅ Goodbye message updated.` });
+        },
+    },
+    {
+        name: "broadcast",
+        aliases: ["bc"],
+        description: "Owner-only: send a message to every group the bot is in",
+        async execute(sock, { from, args, text, msg, config }) {
+            if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
+            const message = text.slice(text.indexOf(args[0])).trim();
+            if (!message) return sock.sendMessage(from, { text: "Usage: .broadcast <message>" });
+
+            const groups = await sock.groupFetchAllParticipating().catch(() => ({}));
+            const groupIds = Object.keys(groups);
+            if (groupIds.length === 0) return sock.sendMessage(from, { text: "⚠️ Bot kisi group mein nahi hai." });
+
+            await sock.sendMessage(from, { text: `📢 Broadcasting to ${groupIds.length} group(s)...` });
+            let sent = 0;
+            for (const gid of groupIds) {
+                const ok = await sock.sendMessage(gid, { text: `📢 *Announcement*\n\n${message}` }).then(() => true).catch(() => false);
+                if (ok) sent++;
+                await new Promise((r) => setTimeout(r, 1500)); // small delay to avoid spam-flagging
+            }
+            await sock.sendMessage(from, { text: `✅ Broadcast bhej diya ${sent}/${groupIds.length} group(s) mein.` });
         },
     },
     {
@@ -1063,7 +1149,7 @@ const allCommands = [
             if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const choice = args[0]?.toLowerCase();
             if (choice !== "on" && choice !== "off") return sock.sendMessage(from, { text: `Current: *${config.ANTI_VV === "true" ? "ON" : "OFF"}*` });
-            config.ANTI_VV = choice === "on" ? "true" : "false";
+            updateConfig(config, "ANTI_VV", choice === "on" ? "true" : "false");
             await sock.sendMessage(from, { text: `✅ Anti view-once is now *${choice.toUpperCase()}*.` });
         },
     },
@@ -1075,7 +1161,7 @@ const allCommands = [
             if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const choice = args[0]?.toLowerCase();
             if (choice !== "on" && choice !== "off") return sock.sendMessage(from, { text: `Current: *${config.ANTI_DELETE === "true" ? "ON" : "OFF"}*` });
-            config.ANTI_DELETE = choice === "on" ? "true" : "false";
+            updateConfig(config, "ANTI_DELETE", choice === "on" ? "true" : "false");
             await sock.sendMessage(from, { text: `✅ Anti-delete is now *${choice.toUpperCase()}*.` });
         },
     },
@@ -1087,7 +1173,7 @@ const allCommands = [
             if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const choice = args[0]?.toLowerCase();
             if (choice !== "same" && choice !== "inbox") return sock.sendMessage(from, { text: `Current: *${config.ANTI_DEL_PATH || "inbox"}*` });
-            config.ANTI_DEL_PATH = choice;
+            updateConfig(config, "ANTI_DEL_PATH", choice);
             await sock.sendMessage(from, { text: `✅ Deleted messages go to: *${choice}*` });
         },
     },
@@ -1099,7 +1185,7 @@ const allCommands = [
             if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const choice = args[0]?.toLowerCase();
             if (choice !== "on" && choice !== "off") return sock.sendMessage(from, { text: `Current: *${config.AUTO_RECORDING === "true" ? "ON" : "OFF"}*` });
-            config.AUTO_RECORDING = choice === "on" ? "true" : "false";
+            updateConfig(config, "AUTO_RECORDING", choice === "on" ? "true" : "false");
             await sock.sendMessage(from, { text: `✅ Recording indicator is now *${choice.toUpperCase()}*.` });
         },
     },
@@ -1111,7 +1197,7 @@ const allCommands = [
             if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const choice = args[0]?.toLowerCase();
             if (choice !== "on" && choice !== "off") return sock.sendMessage(from, { text: `Current: *${config.AUTO_TYPING === "true" ? "ON" : "OFF"}*` });
-            config.AUTO_TYPING = choice === "on" ? "true" : "false";
+            updateConfig(config, "AUTO_TYPING", choice === "on" ? "true" : "false");
             await sock.sendMessage(from, { text: `✅ Auto-typing is now *${choice.toUpperCase()}*.` });
         },
     },
@@ -1123,7 +1209,7 @@ const allCommands = [
             if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const choice = args[0]?.toLowerCase();
             if (choice !== "on" && choice !== "off") return sock.sendMessage(from, { text: `Current: *${config.ALWAYS_ONLINE === "true" ? "ON" : "OFF"}*` });
-            config.ALWAYS_ONLINE = choice === "on" ? "true" : "false";
+            updateConfig(config, "ALWAYS_ONLINE", choice === "on" ? "true" : "false");
             await sock.sendMessage(from, { text: `✅ Always-online is now *${choice.toUpperCase()}*.` });
         },
     },
@@ -1135,7 +1221,7 @@ const allCommands = [
             if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const choice = args[0]?.toLowerCase();
             if (choice !== "on" && choice !== "off") return sock.sendMessage(from, { text: `Current: *${config.AUTO_REACT === "true" ? "ON" : "OFF"}*` });
-            config.AUTO_REACT = choice === "on" ? "true" : "false";
+            updateConfig(config, "AUTO_REACT", choice === "on" ? "true" : "false");
             await sock.sendMessage(from, { text: `✅ Auto-react is now *${choice.toUpperCase()}*.` });
         },
     },
@@ -1147,7 +1233,7 @@ const allCommands = [
             if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const choice = args[0]?.toLowerCase();
             if (choice !== "on" && choice !== "off") return sock.sendMessage(from, { text: `Current: *${config.ANTI_CALL === "true" ? "ON" : "OFF"}*` });
-            config.ANTI_CALL = choice === "on" ? "true" : "false";
+            updateConfig(config, "ANTI_CALL", choice === "on" ? "true" : "false");
             await sock.sendMessage(from, { text: `✅ Anti-call is now *${choice.toUpperCase()}*.` });
         },
     },
@@ -1159,7 +1245,7 @@ const allCommands = [
             if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const text = args.join(" ");
             if (!text) return sock.sendMessage(from, { text: `Current: *${config.REJECT_MSG || "(default)"}*` });
-            config.REJECT_MSG = text;
+            updateConfig(config, "REJECT_MSG", text);
             await sock.sendMessage(from, { text: `✅ Anti-call message updated.` });
         },
     },
@@ -1171,7 +1257,7 @@ const allCommands = [
             if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const choice = args[0]?.toLowerCase();
             if (choice !== "on" && choice !== "off") return sock.sendMessage(from, { text: `Current: *${config.ADMIN_ACTION === "true" ? "ON" : "OFF"}*` });
-            config.ADMIN_ACTION = choice === "on" ? "true" : "false";
+            updateConfig(config, "ADMIN_ACTION", choice === "on" ? "true" : "false");
             await sock.sendMessage(from, { text: `✅ Admin notifications are now *${choice.toUpperCase()}*.` });
         },
     },
@@ -1183,7 +1269,7 @@ const allCommands = [
             if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const choice = args[0]?.toLowerCase();
             if (choice !== "on" && choice !== "off") return sock.sendMessage(from, { text: `Current: *${config.AUTO_STATUS_REACT === "true" ? "ON" : "OFF"}*` });
-            config.AUTO_STATUS_REACT = choice === "on" ? "true" : "false";
+            updateConfig(config, "AUTO_STATUS_REACT", choice === "on" ? "true" : "false");
             await sock.sendMessage(from, { text: `✅ Status auto-like is now *${choice.toUpperCase()}*.` });
         },
     },
@@ -1269,7 +1355,7 @@ const allCommands = [
                 });
                 return;
             }
-            config.WELCOME = choice === "on" ? "true" : "false";
+            updateConfig(config, "WELCOME", choice === "on" ? "true" : "false");
             await sock.sendMessage(from, { text: `✅ Welcome/goodbye messages are now *${choice.toUpperCase()}*.` });
         },
     },
@@ -1540,8 +1626,8 @@ const allCommands = [
                 const context = results.map((r, i) => `[${i + 1}] ${r.title} — ${r.snippet} (${r.url})`).join("\n");
                 const systemPrompt =
                     `Aaj ki tareekh: ${getPakistanDateTimeString()}. Neeche live web search results diye gaye hain — inhe apne alfaz mein use karke, Roman Urdu mein, seedha aur mukhtasar jawab dein. Aakhir mein 1-2 source links bhi de dein.\n\n${context}`;
-                const data = await groq.groqChat({
-                    model: "llama-3.1-8b-instant",
+                const data = await groq.groqChatWithFallback({
+                    model: "llama-3.3-70b-versatile",
                     messages: [
                         { role: "system", content: systemPrompt },
                         { role: "user", content: query },
