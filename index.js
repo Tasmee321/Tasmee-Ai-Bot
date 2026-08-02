@@ -157,160 +157,6 @@ function isWeatherRequest(text) {
     return WEATHER_TOPIC_REGEX.test(text) && WEATHER_QUESTION_REGEX.test(text);
 }
 
-// ============================================
-// Genre-based song picker — when someone asks for a *type* of song
-// ("indian song chahiye") instead of naming one, we show them a short
-// pick-list of popular picks in that genre instead of vaguely asking
-// "which song?". Tapping (or replying with a number) starts the real
-// download immediately with that title.
-// ============================================
-const GENRE_SONG_LISTS = {
-    indian: ["Kesariya - Arijit Singh", "Tum Hi Ho - Arijit Singh", "Raataan Lambiyan", "Apna Bana Le", "Tera Ban Jaunga"],
-    bollywood: ["Kesariya - Arijit Singh", "Tum Hi Ho - Arijit Singh", "Raataan Lambiyan", "Chaiyya Chaiyya", "Tera Ban Jaunga"],
-    punjabi: ["295 - Sidhu Moose Wala", "Excuses - AP Dhillon", "Lover - Diljit Dosanjh", "Brown Munde", "Qismat"],
-    pakistani: ["Pasoori - Ali Sethi", "Afreen Afreen - NFAK", "Tajdar-e-Haram", "Bol Kaffara"],
-    urdu: ["Pasoori - Ali Sethi", "Afreen Afreen - NFAK", "Tajdar-e-Haram", "Bol Kaffara"],
-    english: ["Shape of You - Ed Sheeran", "Blinding Lights - The Weeknd", "Perfect - Ed Sheeran", "Believer - Imagine Dragons"],
-    hollywood: ["Shape of You - Ed Sheeran", "Blinding Lights - The Weeknd", "Perfect - Ed Sheeran", "Believer - Imagine Dragons"],
-    sad: ["Channa Mereya", "Agar Tum Saath Ho", "Tujhe Kitna Chahne Lage"],
-    romantic: ["Tum Hi Ho", "Raabta", "Pehla Nasha", "Kesariya - Arijit Singh"],
-};
-const GENRE_REGEX = /\b(indian|bollywood|punjabi|pakistani|urdu|english|hollywood|sad|romantic)\b/i;
-function detectGenre(text) {
-    const m = text.match(GENRE_REGEX);
-    return m ? m[1].toLowerCase() : null;
-}
-
-// Commands considered safe to trigger WITHOUT the "." prefix when the
-// user's very first word is exactly the command name/alias (e.g. just
-// typing "yt Believer" or "ping"). Kept to public, non-destructive
-// commands on purpose — owner/settings toggles still require the prefix
-// (and owner check) so a random word in normal chat can't flip a setting.
-const SAFE_NOPREFIX_COMMANDS = new Set([
-    "yt", "youtube", "ytmp3", "ytmp4", "tiktok", "sticker", "tts", "image",
-    "weather", "news", "pinterest", "search", "ping", "menu", "help",
-    "alive", "ai", "gpt", "gemini",
-]);
-
-// Pending "pick a number" state for interactive-list style flows (genre
-// song pick, category menu, command list) — mirrors the pendingYt
-// pattern already used elsewhere so it works even if the WhatsApp client
-// doesn't render the tappable list (numeric reply always works as a
-// fallback).
-const pendingChoice = new Map(); // from -> { type, options: [{id,label,run}] }
-
-function setPendingChoice(from, type, options) {
-    pendingChoice.set(from, { type, options, ts: Date.now() });
-    setTimeout(() => {
-        const p = pendingChoice.get(from);
-        if (p && Date.now() - p.ts >= PENDING_INTENT_TTL) pendingChoice.delete(from);
-    }, PENDING_INTENT_TTL);
-}
-
-// Public-facing menu categories (owner/settings toggles are deliberately
-// left out of this tap menu — they're still reachable with the prefix by
-// the owner, just not advertised here).
-const MENU_CATEGORIES = {
-    "🎵 Downloads": { desc: "Songs, videos, TikTok", cmds: ["yt", "tiktok", "pinterest"] },
-    "🎨 Media Tools": { desc: "Stickers, voice notes, images", cmds: ["sticker", "tts", "image", "text"] },
-    "🤖 AI & Search": { desc: "Chat, ask, web search", cmds: ["ai", "search"] },
-    "🌦️ Live Info": { desc: "Weather, news", cmds: ["weather", "news"] },
-    "🏠 Bot Info": { desc: "Ping, uptime, about", cmds: ["ping", "alive", "owner"] },
-};
-
-// Sends the top-level tappable category menu, with a plain numbered-text
-// version underneath (works even on clients that don't render lists).
-async function sendCategoryMenu(sock, from, msg, config) {
-    const catNames = Object.keys(MENU_CATEGORIES);
-    const options = catNames.map((name) => ({ id: `CAT::${name}`, label: name }));
-    setPendingChoice(from, "category", options);
-
-    let body = `✨ *${config.BOT_NAME || "Tasmee AI Bot"}* — kya karna hai?\n\n`;
-    catNames.forEach((name, i) => {
-        body += `*${i + 1}.* ${name} — ${MENU_CATEGORIES[name].desc}\n`;
-    });
-    body += `\n🔢 Number bhej dein, ya list se select karein.\n💡 Ya bas seedha bol dein kya chahiye (jaise "ek gana bhej do") — main samajh jaunga!`;
-
-    try {
-        await sock.sendMessage(from, {
-            text: body,
-            footer: config.OWNER_NAME || "Tasmee",
-            title: "📋 Main Menu",
-            buttonText: "Category Dekho",
-            sections: [
-                {
-                    title: "Categories",
-                    rows: catNames.map((name) => ({
-                        title: name,
-                        rowId: `CAT::${name}`,
-                        description: MENU_CATEGORIES[name].desc,
-                    })),
-                },
-            ],
-        }, { quoted: msg });
-    } catch (err) {
-        await sock.sendMessage(from, { text: body }, { quoted: msg });
-    }
-}
-
-// Sends the commands inside one category (after a category is picked).
-async function sendCommandListForCategory(sock, from, msg, config, categoryName) {
-    const cat = MENU_CATEGORIES[categoryName];
-    if (!cat) return;
-    const options = cat.cmds.map((name) => {
-        const cmd = commands.get(name);
-        return { id: `CMD::${name}`, label: `.${name}`, desc: cmd?.description || "" };
-    });
-    setPendingChoice(from, "command", options);
-
-    let body = `📂 *${categoryName}*\n\n`;
-    options.forEach((o, i) => {
-        body += `*${i + 1}.* ${o.label} — ${o.desc}\n`;
-    });
-    body += `\n🔢 Number bhejein ya select karein.`;
-
-    try {
-        await sock.sendMessage(from, {
-            text: body,
-            footer: config.OWNER_NAME || "Tasmee",
-            title: categoryName,
-            buttonText: "Command Select Karo",
-            sections: [
-                {
-                    title: categoryName,
-                    rows: options.map((o) => ({ title: o.label, rowId: o.id, description: o.desc })),
-                },
-            ],
-        }, { quoted: msg });
-    } catch (err) {
-        await sock.sendMessage(from, { text: body }, { quoted: msg });
-    }
-}
-
-// Sends a genre-based song pick-list (curated titles), used when the
-// person asks for a *type* of song rather than naming one.
-async function sendGenreSongMenu(sock, from, msg, config, genre) {
-    const list = GENRE_SONG_LISTS[genre] || GENRE_SONG_LISTS.indian;
-    const options = list.map((title) => ({ id: `SONG::${title}`, label: title }));
-    setPendingChoice(from, "song", options);
-
-    let body = `🎵 *${genre.charAt(0).toUpperCase() + genre.slice(1)} Songs* — konsa chahiye?\n\n`;
-    list.forEach((t, i) => (body += `*${i + 1}.* ${t}\n`));
-    body += `\n🔢 Number bhejein, list se select karein, ya khud gaane ka naam likh dein.`;
-
-    try {
-        await sock.sendMessage(from, {
-            text: body,
-            footer: "Tasmee AI Bot",
-            title: `🎧 ${genre} Songs`,
-            buttonText: "Gaana Select Karo",
-            sections: [{ title: "Pick a song", rows: list.map((t) => ({ title: t, rowId: `SONG::${t}` })) }],
-        }, { quoted: msg });
-    } catch (err) {
-        await sock.sendMessage(from, { text: body }, { quoted: msg });
-    }
-}
-
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 const question = (text) => new Promise((resolve) => rl.question(text, resolve));
 
@@ -339,98 +185,6 @@ for (const command of commandList) {
 }
 
 console.log(`✅ Loaded ${commandList.length} command(s), ${commands.size} total with aliases.`);
-
-// ============================================
-// Shared command-execution helper — runs a command by name with the same
-// type-react + error handling as the normal prefixed path. Used by: the
-// normal "." prefixed dispatch, the no-prefix direct-name dispatch, and
-// taps/number-replies on the interactive menu/song-pick lists.
-// ============================================
-async function runCommandByName(sock, msg, from, config, commandName, argsArr, rawText) {
-    const cmd = commands.get(commandName.toLowerCase());
-    if (!cmd) return false;
-
-    if (!msg.key.fromMe) {
-        const reactEmoji = TYPE_REACT_MAP[cmd.name] || DEFAULT_COMMAND_REACT;
-        await sock.sendMessage(from, { react: { text: reactEmoji, key: msg.key } }).catch(() => {});
-    }
-    try {
-        await cmd.execute(sock, {
-            from,
-            isGroup: from.endsWith("@g.us"),
-            args: argsArr,
-            text: rawText,
-            msg,
-            config,
-            allCommands: commandList,
-        });
-    } catch (err) {
-        console.log(`Command "${commandName}" error:`, err.message);
-        await sock.sendMessage(from, { text: `❌ Command chalate waqt error aaya: ${err.message}` }).catch(() => {});
-    }
-    return true;
-}
-
-// ============================================
-// Resolves a tap on the interactive menu (listResponseMessage) OR a plain
-// numeric reply to whatever list we last sent this chat (pendingChoice).
-// Returns true if it handled the message, false if there was nothing to
-// resolve (caller should fall through to normal handling).
-// ============================================
-async function resolveChoice(sock, msg, from, config, selectedRowId, plainText) {
-    let rowId = selectedRowId;
-    if (!rowId && plainText) {
-        const pending = pendingChoice.get(from);
-        if (pending) {
-            const idx = parseInt(plainText.trim(), 10);
-            if (!Number.isNaN(idx) && pending.options[idx - 1]) {
-                rowId = pending.options[idx - 1].id;
-            }
-        }
-    }
-    if (!rowId) return false;
-    pendingChoice.delete(from);
-
-    if (rowId.startsWith("CAT::")) {
-        await sendCommandListForCategory(sock, from, msg, config, rowId.slice(5));
-        return true;
-    }
-
-    if (rowId.startsWith("CMD::")) {
-        const name = rowId.slice(5);
-        if (["yt", "tiktok", "pinterest"].includes(name)) {
-            setPending(pendingSongRequest, from);
-            await sock.sendMessage(from, { text: "🎵 Konsa gana/video chahiye? Naam ya link bhej dein." }, { quoted: msg });
-            return true;
-        }
-        if (name === "image") {
-            commandList.pendingImage.set(from, Date.now());
-            await sock.sendMessage(from, { text: "🖼️ Kis cheez ki image chahiye? Naam bata dein." }, { quoted: msg });
-            return true;
-        }
-        if (name === "tts") {
-            setPending(pendingTTSRequest, from);
-            await sock.sendMessage(from, { text: "🎙️ Kaunsa text voice note mein chahiye? Likh dein." }, { quoted: msg });
-            return true;
-        }
-        if (["weather", "news", "search", "ai"].includes(name)) {
-            await sock.sendMessage(from, {
-                text: `✍️ .${name} ke baad apna sawal/city likh kar bhej dein — jaise: *.${name} Lahore*`,
-            }, { quoted: msg });
-            return true;
-        }
-        await runCommandByName(sock, msg, from, config, name, [], `.${name}`);
-        return true;
-    }
-
-    if (rowId.startsWith("SONG::")) {
-        const title = rowId.slice(6);
-        await commandList.startYtFlow(sock, { from, msg, query: title, wantsVideo: null, config });
-        return true;
-    }
-
-    return false;
-}
 
 // ============================================
 // Restore session from SESSION_ID env var (for server deployments like Render)
@@ -711,17 +465,56 @@ async function startBot() {
             msg.message.videoMessage?.caption ||
             "";
 
-        // A tap on our interactive menu/song-pick list arrives as its own
-        // message type (no plain "text"). Resolve it — or a plain numeric
-        // reply to the last list we sent — before anything else.
-        const selectedRowId =
-            msg.message.listResponseMessage?.singleSelectReply?.selectedRowId ||
-            msg.message.templateButtonReplyMessage?.selectedId ||
-            msg.message.buttonsResponseMessage?.selectedButtonId ||
-            null;
-        if (!msg.key.fromMe && (selectedRowId || (pendingChoice.has(from) && text.trim()))) {
-            const handled = await resolveChoice(sock, msg, from, config, selectedRowId, text);
-            if (handled) return;
+        // ============================================
+        // Group moderation: anti-link + anti-bad-word.
+        // Both already had .antilink / .antibadword toggle commands, but
+        // neither was ever actually checked anywhere — wiring that up here.
+        // Skipped for group admins (they can post links/curse freely).
+        // ============================================
+        if (isGroup && !msg.key.fromMe && text.trim()) {
+            const senderJid = msg.key.participant || from;
+            let senderIsAdmin = false;
+            try {
+                const meta = await sock.groupMetadata(from);
+                const participant = meta.participants.find((p) => p.id === senderJid);
+                senderIsAdmin = participant?.admin === "admin" || participant?.admin === "superadmin";
+            } catch {}
+
+            if (!senderIsAdmin) {
+                let antilinkOn = false;
+                try {
+                    const settings = JSON.parse(fs.readFileSync(path.join(__dirname, "data/antilink.json"), "utf8"));
+                    antilinkOn = settings[from] === true;
+                } catch {}
+                const hasLink = /(https?:\/\/|chat\.whatsapp\.com\/|wa\.me\/)/i.test(text);
+                if (antilinkOn && hasLink) {
+                    await sock.sendMessage(from, { delete: msg.key }).catch(() => {});
+                    await sock.sendMessage(from, {
+                        text: `🔗 Links allowed nahi hain is group mein.`,
+                        mentions: [senderJid],
+                    }).catch(() => {});
+                    return;
+                }
+
+                if (config.ANTI_BAD_WORD === "true" || config.ANTI_BAD_WORD === true) {
+                    let badWords = [];
+                    try {
+                        badWords = JSON.parse(fs.readFileSync(path.join(__dirname, "data/badwords.json"), "utf8"));
+                    } catch {
+                        badWords = [];
+                    }
+                    const lower = text.toLowerCase();
+                    const matched = badWords.some((w) => w && lower.includes(w.toLowerCase()));
+                    if (matched) {
+                        await sock.sendMessage(from, { delete: msg.key }).catch(() => {});
+                        await sock.sendMessage(from, {
+                            text: `🚫 Bad language allowed nahi hai is group mein, meherbani se dhyan rakhein.`,
+                            mentions: [senderJid],
+                        }).catch(() => {});
+                        return;
+                    }
+                }
+            }
         }
 
         // Voice notes: transcribe them and reply like a normal chat message
@@ -846,38 +639,6 @@ async function startBot() {
                 return;
             }
 
-            // Open the new tappable menu even without the "." — just saying
-            // "menu" or "help" on its own works.
-            if (!isGroup && !msg.key.fromMe && /^(menu|help)$/i.test(text.trim())) {
-                await sendCategoryMenu(sock, from, msg, config);
-                return;
-            }
-
-            // Genre-based song request — "indian song bhejo", "punjabi gana
-            // chahiye" etc. Instead of vaguely asking "which song?", show a
-            // short pick-list of real titles in that genre.
-            if (!isGroup && !msg.key.fromMe && text.trim() && isDownloadRequest(text)) {
-                const genre = detectGenre(text);
-                if (genre) {
-                    await sendGenreSongMenu(sock, from, msg, config, genre);
-                    return;
-                }
-            }
-
-            // No-prefix direct command — e.g. just typing "yt Believer" or
-            // "ping" (no "."). Only a curated safe/public list of commands
-            // can fire this way, and only when the message actually STARTS
-            // with that exact command word, so normal chat sentences don't
-            // accidentally trigger a command.
-            if (!isGroup && !msg.key.fromMe && text.trim()) {
-                const words = text.trim().split(/ +/);
-                const firstWord = words[0].toLowerCase();
-                if (SAFE_NOPREFIX_COMMANDS.has(firstWord) && commands.has(firstWord)) {
-                    const handled = await runCommandByName(sock, msg, from, config, firstWord, words.slice(1), text);
-                    if (handled) return;
-                }
-            }
-
             // Natural "mujhe gana chahiye" / "video chahiye" style request —
             // ask which one, then actually download it once they answer
             // (handled by the pendingSongRequest check above).
@@ -964,14 +725,6 @@ async function startBot() {
 
         const args = text.slice(PREFIX.length).trim().split(/ +/);
         const commandName = args.shift().toLowerCase();
-
-        // .menu / .help now open the new tappable category menu instead of
-        // the old wall-of-text list.
-        if (commandName === "menu" || commandName === "help") {
-            await sendCategoryMenu(sock, from, msg, config);
-            return;
-        }
-
         const command = commands.get(commandName);
 
         console.log(`🔎 Parsed command: "${commandName}" | found: ${!!command}`);
