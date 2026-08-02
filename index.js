@@ -465,17 +465,8 @@ async function startBot() {
             msg.message.videoMessage?.caption ||
             "";
 
-        // Prefix is now OPTIONAL: "menu", ".menu", and "MENU" all work the
-        // same. We look at the first word of the message — if it (after
-        // stripping a leading prefix char, if present) matches a real
-        // command name/alias, we treat this as a command regardless of
-        // whether a dot was typed. Anything that doesn't match a known
-        // command falls through to the natural-language / AI auto-chat path.
-        const rawFirstWord = text.trim().split(/\s+/)[0] || "";
-        const strippedFirstWord = rawFirstWord.startsWith(PREFIX) && rawFirstWord.length > PREFIX.length
-            ? rawFirstWord.slice(PREFIX.length)
-            : rawFirstWord;
-        const matchedCommand = commands.get(strippedFirstWord.toLowerCase());
+        // Commands require the prefix (e.g. "."). Anything without it falls
+        // through to natural-language detection / AI auto-chat below.
 
         // ============================================
         // Group moderation: anti-link + anti-bad-word.
@@ -570,7 +561,7 @@ async function startBot() {
             return;
         }
 
-        if (!matchedCommand) {
+        if (!text.startsWith(PREFIX)) {
             // Check if this is a reply to a pending "audio or video?" question
             const pending = commandList.pendingYt?.get(from);
             const choice = text.trim().toLowerCase();
@@ -716,6 +707,16 @@ async function startBot() {
                 if (Date.now() - lastReply < AI_COOLDOWN_MS) return;
                 aiCooldown.set(from, Date.now());
 
+                // First message ever from this chat, or first message after
+                // being quiet for 1+ hour (memory.js auto-expires at that
+                // point) — send the full command menu once so they discover
+                // everything the bot can do, then continue answering normally.
+                const { history } = memory.getContext(from);
+                if (history.length === 0) {
+                    const helpCmd = commandList.find((c) => c.name === "help");
+                    if (helpCmd) await helpCmd.execute(sock, { from, config, allCommands: commandList }).catch(() => {});
+                }
+
                 const answer = await getAiReply(text, from, sock, msg);
                 if (answer) {
                     await sock.sendPresenceUpdate("composing", from).catch(() => {});
@@ -735,9 +736,9 @@ async function startBot() {
             }
         } catch {}
 
-        const args = text.trim().split(/\s+/).slice(1);
-        const commandName = strippedFirstWord.toLowerCase();
-        const command = matchedCommand;
+        const args = text.slice(PREFIX.length).trim().split(/ +/);
+        const commandName = args.shift().toLowerCase();
+        const command = commands.get(commandName);
 
         console.log(`🔎 Parsed command: "${commandName}" | found: ${!!command}`);
 
