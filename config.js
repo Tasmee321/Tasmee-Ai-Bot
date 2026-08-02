@@ -96,7 +96,7 @@ Escalation rule — only on a clear ask:
     OWNER_NUMBER:
         process.env.OWNER_NUMBER ||
         getConfig("OWNER_NUMBER") ||
-        "923216452407",
+        "923423899407",
 
     OWNER_NAME:
         process.env.OWNER_NAME ||
