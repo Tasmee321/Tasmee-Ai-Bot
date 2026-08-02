@@ -95,6 +95,7 @@ Escalation rule — only on a clear ask:
     // ===== OWNER SETTINGS =====
     OWNER_NUMBER:
         process.env.OWNER_NUMBER ||
+        getConfig("OWNER_NUMBER") ||
         "923216452407",
 
     OWNER_NAME:
@@ -120,18 +121,21 @@ Escalation rule — only on a clear ask:
         process.env.AUTO_STATUS_MSG ||
         "*Tasmee-Ai-Bot VIEWED YOUR STATUS 🤖*",
 
+    // Permanently ON by default (per owner's request) — auto-read still
+    // reads from configdb first in case it's ever explicitly turned off.
     READ_MESSAGE:
-        process.env.READ_MESSAGE || "false",
+        process.env.READ_MESSAGE || getConfig("READ_MESSAGE") || "true",
 
     REJECT_MSG:
         process.env.REJECT_MSG ||
+        getConfig("REJECT_MSG") ||
         "*📞 THIS PERSON NOT ALLOWED CALL*",
 
     AUTO_DOWNLOADER:
         process.env.AUTO_DOWNLOADER || "true",
 
     AUTO_REACT:
-        process.env.AUTO_REACT || "false",
+        process.env.AUTO_REACT || getConfig("AUTO_REACT") || "false",
 
     OWNER_REACT:
         process.env.OWNER_REACT || "false",
@@ -146,16 +150,18 @@ Escalation rule — only on a clear ask:
 
     STICKER_NAME:
         process.env.STICKER_NAME ||
+        getConfig("STICKER_NAME") ||
         "Tasmee Ul Hasnain",
 
     AUTO_STICKER:
         process.env.AUTO_STICKER || "false",
 
+    // Permanently ON by default (per owner's request).
     AUTO_RECORDING:
-        process.env.AUTO_RECORDING || "false",
+        process.env.AUTO_RECORDING || getConfig("AUTO_RECORDING") || "true",
 
     AUTO_TYPING:
-        process.env.AUTO_TYPING || "false",
+        process.env.AUTO_TYPING || getConfig("AUTO_TYPING") || "true",
 
     MENTION_REPLY:
         process.env.MENTION_REPLY || "false",
@@ -167,10 +173,10 @@ Escalation rule — only on a clear ask:
 
     // ===== SECURITY =====
     ANTI_DELETE:
-        process.env.ANTI_DELETE || "true",
+        process.env.ANTI_DELETE || getConfig("ANTI_DELETE") || "true",
 
     ANTI_CALL:
-        process.env.ANTI_CALL || "false",
+        process.env.ANTI_CALL || getConfig("ANTI_CALL") || "false",
 
     ANTI_BAD_WORD:
         process.env.ANTI_BAD_WORD || "false",
@@ -179,13 +185,13 @@ Escalation rule — only on a clear ask:
         process.env.ANTI_LINK || "true",
 
     ANTI_VV:
-        process.env.ANTI_VV || "true",
+        process.env.ANTI_VV || getConfig("ANTI_VV") || "true",
 
     DELETE_LINKS:
         process.env.DELETE_LINKS || "false",
 
     ANTI_DEL_PATH:
-        process.env.ANTI_DEL_PATH || "same",
+        process.env.ANTI_DEL_PATH || getConfig("ANTI_DEL_PATH") || "same",
 
     ANTI_BOT:
         process.env.ANTI_BOT || "true",
@@ -196,16 +202,17 @@ Escalation rule — only on a clear ask:
     // ===== BOT SETTINGS =====
     DESCRIPTION:
         process.env.DESCRIPTION ||
+        getConfig("DESCRIPTION") ||
         "*© CREATER Tasmee Ul Hasnain*",
 
     PUBLIC_MODE:
         process.env.PUBLIC_MODE || "true",
 
     ALWAYS_ONLINE:
-        process.env.ALWAYS_ONLINE || "false",
+        process.env.ALWAYS_ONLINE || getConfig("ALWAYS_ONLINE") || "false",
 
     AUTO_STATUS_REACT:
-        process.env.AUTO_STATUS_REACT || "false",
+        process.env.AUTO_STATUS_REACT || getConfig("AUTO_STATUS_REACT") || "false",
 
     AUTO_STATUS_SEEN:
         process.env.AUTO_STATUS_SEEN || "true",
@@ -214,13 +221,19 @@ Escalation rule — only on a clear ask:
         process.env.AUTO_BIO || "false",
 
     WELCOME:
-        process.env.WELCOME || "false",
+        process.env.WELCOME || getConfig("WELCOME") || "false",
+
+    WELCOME_MSG:
+        process.env.WELCOME_MSG || getConfig("WELCOME_MSG") || "",
 
     GOODBYE:
-        process.env.GOODBYE || "false",
+        process.env.GOODBYE || getConfig("GOODBYE") || "false",
+
+    GOODBYE_MSG:
+        process.env.GOODBYE_MSG || getConfig("GOODBYE_MSG") || "",
 
     ADMIN_ACTION:
-        process.env.ADMIN_ACTION || "false",
+        process.env.ADMIN_ACTION || getConfig("ADMIN_ACTION") || "false",
 
     CONFIG_DB: true,
 
