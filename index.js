@@ -465,6 +465,18 @@ async function startBot() {
             msg.message.videoMessage?.caption ||
             "";
 
+        // Prefix is now OPTIONAL: "menu", ".menu", and "MENU" all work the
+        // same. We look at the first word of the message — if it (after
+        // stripping a leading prefix char, if present) matches a real
+        // command name/alias, we treat this as a command regardless of
+        // whether a dot was typed. Anything that doesn't match a known
+        // command falls through to the natural-language / AI auto-chat path.
+        const rawFirstWord = text.trim().split(/\s+/)[0] || "";
+        const strippedFirstWord = rawFirstWord.startsWith(PREFIX) && rawFirstWord.length > PREFIX.length
+            ? rawFirstWord.slice(PREFIX.length)
+            : rawFirstWord;
+        const matchedCommand = commands.get(strippedFirstWord.toLowerCase());
+
         // ============================================
         // Group moderation: anti-link + anti-bad-word.
         // Both already had .antilink / .antibadword toggle commands, but
@@ -558,7 +570,7 @@ async function startBot() {
             return;
         }
 
-        if (!text.startsWith(PREFIX)) {
+        if (!matchedCommand) {
             // Check if this is a reply to a pending "audio or video?" question
             const pending = commandList.pendingYt?.get(from);
             const choice = text.trim().toLowerCase();
@@ -723,9 +735,9 @@ async function startBot() {
             }
         } catch {}
 
-        const args = text.slice(PREFIX.length).trim().split(/ +/);
-        const commandName = args.shift().toLowerCase();
-        const command = commands.get(commandName);
+        const args = text.trim().split(/\s+/).slice(1);
+        const commandName = strippedFirstWord.toLowerCase();
+        const command = matchedCommand;
 
         console.log(`🔎 Parsed command: "${commandName}" | found: ${!!command}`);
 
