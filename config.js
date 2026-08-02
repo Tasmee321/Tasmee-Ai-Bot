@@ -15,11 +15,17 @@ module.exports = {
 
     OPENAI_API_KEY: process.env.OPENAI_API_KEY || "",
 
-    // Backup Groq keys — used automatically if the key above runs out of
-    // tokens / hits its rate limit. Leave empty if you only have one key.
+    // Backup Groq keys — used automatically if an earlier one runs out of
+    // tokens / hits its rate limit. Leave any of these empty if unused.
     OPENAI_API_KEY_2: process.env.OPENAI_API_KEY_2 || "",
-
     OPENAI_API_KEY_3: process.env.OPENAI_API_KEY_3 || "",
+    OPENAI_API_KEY_4: process.env.OPENAI_API_KEY_4 || "",
+    OPENAI_API_KEY_5: process.env.OPENAI_API_KEY_5 || "",
+    OPENAI_API_KEY_6: process.env.OPENAI_API_KEY_6 || "",
+    OPENAI_API_KEY_7: process.env.OPENAI_API_KEY_7 || "",
+    OPENAI_API_KEY_8: process.env.OPENAI_API_KEY_8 || "",
+    OPENAI_API_KEY_9: process.env.OPENAI_API_KEY_9 || "",
+    OPENAI_API_KEY_10: process.env.OPENAI_API_KEY_10 || "",
 
     BOT_NAME:
         process.env.BOT_NAME ||
