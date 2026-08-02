@@ -62,6 +62,41 @@ const DEFAULT_COMMAND_REACT = "✅"; // used for commands not listed above
 
 // In-memory store for antidelete feature (keeps last 500 messages)
 const messageStore = new Map();
+// Per-sender cooldown for AI auto-chat replies — stops one chatty user/group
+// from burning the whole day's Groq token budget by themselves.
+const aiCooldown = new Map();
+const AI_COOLDOWN_MS = 8000;
+
+// ============================================
+// Session backup — every few hours, copy the live `session` folder into
+// `session_backups/<timestamp>/`, keeping only the last 5. If the live
+// session ever gets corrupted, one of these can be copied back over
+// `session/` as a recovery attempt instead of always needing a full re-scan.
+// ============================================
+const SESSION_DIR = path.join(__dirname, "session");
+const SESSION_BACKUP_ROOT = path.join(__dirname, "session_backups");
+const SESSION_BACKUP_INTERVAL_MS = 6 * 60 * 60 * 1000; // every 6 hours
+const SESSION_BACKUPS_TO_KEEP = 5;
+
+function backupSession() {
+    try {
+        if (!fs.existsSync(SESSION_DIR)) return;
+        if (!fs.existsSync(SESSION_BACKUP_ROOT)) fs.mkdirSync(SESSION_BACKUP_ROOT, { recursive: true });
+
+        const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+        const dest = path.join(SESSION_BACKUP_ROOT, stamp);
+        fs.cpSync(SESSION_DIR, dest, { recursive: true });
+
+        const backups = fs.readdirSync(SESSION_BACKUP_ROOT).sort();
+        while (backups.length > SESSION_BACKUPS_TO_KEEP) {
+            const oldest = backups.shift();
+            fs.rmSync(path.join(SESSION_BACKUP_ROOT, oldest), { recursive: true, force: true });
+        }
+        console.log(`💾 Session backed up (${stamp})`);
+    } catch (err) {
+        console.log("⚠️ Session backup failed:", err.message);
+    }
+}
 function rememberMessage(key, content) {
     messageStore.set(key, content);
     if (messageStore.size > 500) {
@@ -225,8 +260,8 @@ async function getAiReply(text, from, sock, msg) {
             const data = await response.json();
             answer = data?.candidates?.[0]?.content?.parts?.[0]?.text;
         } else if (hasGroqKey) {
-            const data = await groq.groqChat({
-                model: "llama-3.1-8b-instant",
+            const data = await groq.groqChatWithFallback({
+                model: "llama-3.3-70b-versatile",
                 messages: [
                     { role: "system", content: systemPrompt || "You are a helpful assistant." },
                     ...history,
@@ -283,6 +318,13 @@ async function startBot() {
     });
     sockRef = sock;
 
+    groq.onAllKeysFailed(async (err) => {
+        const ownerJid = (config.OWNER_NUMBER || "").replace(/[^0-9]/g, "") + "@s.whatsapp.net";
+        await sock.sendMessage(ownerJid, {
+            text: `⚠️ *AI keys exhaust ho gayi hain!*\n\nSaari Groq API keys ne apni limit khatam kar di hai — AI features (\`.ai\`, auto-chat, \`.search\`) abhi kaam nahi karenge jab tak limit reset na ho.\n\nError: ${err.message}`,
+        }).catch(() => {});
+    });
+
     if (!sock.authState.creds.registered) {
         if (process.stdin.isTTY) {
             const phoneNumber = await question(
@@ -325,6 +367,8 @@ async function startBot() {
                     sock.sendPresenceUpdate("available").catch(() => {});
                 }, 30000);
             }
+            backupSession();
+            setInterval(backupSession, SESSION_BACKUP_INTERVAL_MS);
         }
     });
 
@@ -444,6 +488,8 @@ async function startBot() {
 
                 const answer = await getAiReply(transcript, from, sock, msg);
                 if (answer) {
+                    await sock.sendPresenceUpdate("composing", from).catch(() => {});
+                    await new Promise((r) => setTimeout(r, 5000));
                     await sock.sendMessage(from, { text: answer }, { quoted: msg });
                     // Bonus: also reply with a spoken voice note, best-effort.
                     try {
@@ -602,8 +648,14 @@ async function startBot() {
                 text.trim() &&
                 (config.CHATBOT === "on" || config.CHATBOT === "true" || config.CHATBOT === true)
             ) {
+                const lastReply = aiCooldown.get(from) || 0;
+                if (Date.now() - lastReply < AI_COOLDOWN_MS) return;
+                aiCooldown.set(from, Date.now());
+
                 const answer = await getAiReply(text, from, sock, msg);
                 if (answer) {
+                    await sock.sendPresenceUpdate("composing", from).catch(() => {});
+                    await new Promise((r) => setTimeout(r, 5000));
                     await sock.sendMessage(from, { text: answer }, { quoted: msg });
                 }
             }
