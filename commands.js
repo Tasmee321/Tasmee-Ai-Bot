@@ -694,7 +694,7 @@ const allCommands = [
             menu += `│ ⏱️ ᴜᴘᴛɪᴍᴇ   : ${mins}m ${secs}s\n`;
             menu += `│ ⚙️ ᴍᴏᴅᴇ     : ${config.MODE || "public"}\n`;
             menu += `│ 🧠 ᴀɪ ᴄᴏʀᴇ  : Groq — Llama 3.3 (70B)\n`;
-            menu += `│ 📦 ᴘʀᴇғɪx   : optional — "${config.PREFIX || "."}" ya bilkul bina prefix bhi chalega\n`;
+            menu += `│ 📦 ᴘʀᴇғɪx   : "${config.PREFIX || "."}"\n`;
             menu += `│ 📱 ᴏᴡɴᴇʀ    : wa.me/${config.OWNER_NUMBER || "N/A"}\n`;
             menu += `└─────────────────────`;
 
@@ -704,15 +704,15 @@ const allCommands = [
                 for (const cmdName of cmdNames) {
                     const cmd = allCommands.find((c) => c.name === cmdName);
                     if (!cmd) continue;
-                    const aliasText = cmd.aliases && cmd.aliases.length ? ` (${cmd.aliases.map((a) => a).join(", ")})` : "";
-                    menu += `\n  ➤ ${cmd.name}${aliasText}`;
+                    const aliasText = cmd.aliases && cmd.aliases.length ? ` (${cmd.aliases.map((a) => `${prefix}${a}`).join(", ")})` : "";
+                    menu += `\n  ➤ ${prefix}${cmd.name}${aliasText}`;
                 }
                 menu += `\n╰${"━".repeat(category.length + 8)}╯`;
             }
 
             menu += `\n\n◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤`;
             menu += `\n🤝 Main 24/7 aapki madad ke liye yahan hoon!`;
-            menu += `\n💬 Prefix (${prefix}) laga kar ya bina lagaye, kisi bhi command ka naam likh dein.`;
+            menu += `\n💬 Har command se pehle *${prefix}* zaroor lagayein (jaise ${prefix}yt, ${prefix}weather).`;
             menu += `\n©️ ᴘᴏᴡᴇʀᴇᴅ ʙʏ ${config.OWNER_NAME || "Tasmee ul Hasnain"}`;
 
             if (config.MENU_IMAGE_URL) {
