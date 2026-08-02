@@ -641,6 +641,25 @@ async function cobaltDownload(url) {
     return data.url || null;
 }
 
+const MENU_CATEGORIES = {
+    "🤖 AI & SMART": ["ai", "search", "translate", "shayari", "joke", "quote"],
+    "📥 DOWNLOAD": ["yt", "tiktok", "pinterest", "instagram", "facebook", "twitter", "statusdl"],
+    "🎨 MEDIA": ["sticker", "toimg", "tts", "text", "image"],
+    "🕌 ISLAMIC": ["prayertimes", "qibla", "hijri"],
+    "🌦️ LIVE INFO": ["weather", "news", "cricket", "petrol", "gold", "currency", "define"],
+    "🎉 FUN": ["truthordare", "compatibility", "riddle", "poll"],
+    "🛠️ UTILITY": ["qr", "calc", "remind", "clearchat"],
+    "👥 GROUP TOOLS": ["tagall", "kick", "antilink", "antidelete", "antiviewonce", "antibadword"],
+    "👑 OWNER": ["ban", "unban", "banlist", "block", "unblock", "sudo", "delsudo", "listsudo", "mode", "autoread", "broadcast"],
+    "⚙️ SETTINGS": [
+        "welcome", "goodbye", "setwelcome", "setgoodbye",
+        "editpath", "recording", "autotyping", "online", "autoreact", "anticall",
+        "anticallmsg", "adminaction", "statuslike", "prefix", "botname", "ownername",
+        "ownernumber", "description", "stickername", "settings",
+    ],
+    "🏠 MAIN": ["ping", "help", "alive", "owner", "repo", "developer"],
+};
+
 const allCommands = [
     {
         name: "ping",
@@ -662,51 +681,38 @@ const allCommands = [
             const mins = Math.floor(uptimeSec / 60);
             const secs = uptimeSec % 60;
 
-            const categories = {
-                "🤖 AI & SMART": ["ai", "search", "translate", "shayari", "joke", "quote"],
-                "📥 DOWNLOAD": ["yt", "tiktok", "pinterest", "instagram", "facebook", "twitter", "statusdl"],
-                "🎨 MEDIA": ["sticker", "toimg", "tts", "text", "image"],
-                "🕌 ISLAMIC": ["prayertimes", "qibla", "hijri"],
-                "🌦️ LIVE INFO": ["weather", "news", "cricket", "petrol", "gold", "currency", "define"],
-                "🎉 FUN": ["truthordare", "compatibility", "riddle", "poll"],
-                "🛠️ UTILITY": ["qr", "calc", "remind", "clearchat"],
-                "👥 GROUP TOOLS": ["tagall", "kick", "antilink", "antidelete", "antiviewonce", "antibadword"],
-                "👑 OWNER": ["ban", "unban", "banlist", "block", "unblock", "sudo", "delsudo", "listsudo", "mode", "autoread", "broadcast"],
-                "⚙️ SETTINGS": [
-                    "welcome", "goodbye", "setwelcome", "setgoodbye",
-                    "editpath", "recording", "autotyping", "online", "autoreact", "anticall",
-                    "anticallmsg", "adminaction", "statuslike", "prefix", "botname", "ownername",
-                    "ownernumber", "description", "stickername", "settings",
-                ],
-                "🏠 MAIN": ["ping", "help", "alive", "owner", "repo", "developer"],
-            };
+            const categories = MENU_CATEGORIES;
 
-            let menu = `╔═══════════════════╗\n`;
-            menu += `   🚀 *${config.BOT_NAME || "Tasmee-Ai-Bot"}* 🚀\n`;
-            menu += `╚═══════════════════╝\n\n`;
-            menu += `👑 ᴏᴡɴᴇʀ: ${config.OWNER_NAME || "Tasmee"}\n`;
-            menu += `📜 ᴄᴏᴍᴍᴀɴᴅs: ${allCommands.length}\n`;
-            menu += `⏱️ ᴜᴘᴛɪᴍᴇ: ${mins}m ${secs}s\n`;
-            menu += `📦 ᴘʀᴇғɪx: ${config.PREFIX || "."}\n`;
-            menu += `⚙️ ᴍᴏᴅᴇ: ${config.MODE || "public"}\n`;
-            menu += `🧠 ᴀɪ ᴇɴɢɪɴᴇ: Groq — Llama 3.3 (70B)\n`;
-            menu += `🏷️ ᴠᴇʀsɪᴏɴ: 2.0 — Advanced\n`;
-            menu += `📱 ᴏᴡɴᴇʀ ᴄᴏɴᴛᴀᴄᴛ: wa.me/${config.OWNER_NUMBER || "N/A"}\n`;
-            menu += `\n─────────────────────`;
+            let menu = `◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤\n`;
+            menu += `　　⟦ SYSTEM ONLINE ⟧\n`;
+            menu += `◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤\n\n`;
+            menu += `🤖 *${config.BOT_NAME || "Tasmee-Ai-Bot"}*\n`;
+            menu += `⚡ Advanced Neural Assistant — v2.0\n\n`;
+            menu += `┌─────────────────────\n`;
+            menu += `│ 👑 ᴏᴡɴᴇʀ    : ${config.OWNER_NAME || "Tasmee"}\n`;
+            menu += `│ 📜 ᴄᴏᴍᴍᴀɴᴅs : ${allCommands.length}\n`;
+            menu += `│ ⏱️ ᴜᴘᴛɪᴍᴇ   : ${mins}m ${secs}s\n`;
+            menu += `│ ⚙️ ᴍᴏᴅᴇ     : ${config.MODE || "public"}\n`;
+            menu += `│ 🧠 ᴀɪ ᴄᴏʀᴇ  : Groq — Llama 3.3 (70B)\n`;
+            menu += `│ 📦 ᴘʀᴇғɪx   : optional — "${config.PREFIX || "."}" ya bilkul bina prefix bhi chalega\n`;
+            menu += `│ 📱 ᴏᴡɴᴇʀ    : wa.me/${config.OWNER_NUMBER || "N/A"}\n`;
+            menu += `└─────────────────────`;
 
             const prefix = config.PREFIX || ".";
             for (const [category, cmdNames] of Object.entries(categories)) {
-                menu += `\n\n▣ ${category}\n`;
+                menu += `\n\n╭━━━ ${category} ━━━╮`;
                 for (const cmdName of cmdNames) {
                     const cmd = allCommands.find((c) => c.name === cmdName);
                     if (!cmd) continue;
-                    const aliasText = cmd.aliases && cmd.aliases.length ? ` (${cmd.aliases.map((a) => `${prefix}${a}`).join(", ")})` : "";
-                    menu += `  ➤ ${prefix}${cmd.name}${aliasText}\n`;
+                    const aliasText = cmd.aliases && cmd.aliases.length ? ` (${cmd.aliases.map((a) => a).join(", ")})` : "";
+                    menu += `\n  ➤ ${cmd.name}${aliasText}`;
                 }
+                menu += `\n╰${"━".repeat(category.length + 8)}╯`;
             }
 
-            menu += `\n─────────────────────`;
+            menu += `\n\n◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤`;
             menu += `\n🤝 Main 24/7 aapki madad ke liye yahan hoon!`;
+            menu += `\n💬 Prefix (${prefix}) laga kar ya bina lagaye, kisi bhi command ka naam likh dein.`;
             menu += `\n©️ ᴘᴏᴡᴇʀᴇᴅ ʙʏ ${config.OWNER_NAME || "Tasmee ul Hasnain"}`;
 
             if (config.MENU_IMAGE_URL) {
@@ -2259,3 +2265,4 @@ module.exports.getPakistanDateTimeString = getPakistanDateTimeString;
 module.exports.chatWithTools = chatWithTools;
 module.exports.AI_TOOLS = AI_TOOLS;
 module.exports.runAiTool = runAiTool;
+module.exports.MENU_CATEGORIES = MENU_CATEGORIES;
