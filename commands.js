@@ -944,6 +944,31 @@ async function chatWithTools(sock, { from, msg, config, systemPrompt, history, q
     return followData.choices?.[0]?.message?.content || "✅ Ho gaya!";
 }
 
+// Fetches an Internet Archive item's file list and finds the actual PDF
+// file inside it (archive.org "details" pages don't give a direct file —
+// you have to read the item's metadata to find the real filename first).
+async function fetchArchivePdf(identifier) {
+    const res = await fetch(`https://archive.org/metadata/${encodeURIComponent(identifier)}`);
+    const data = await res.json();
+    const files = data?.files || [];
+    const pdfFile = files.find((f) => (f.format || "").toLowerCase().includes("pdf") || (f.name || "").toLowerCase().endsWith(".pdf"));
+    if (!pdfFile) throw new Error("Is item mein koi PDF file nahi mili.");
+
+    const sizeBytes = parseInt(pdfFile.size, 10) || 0;
+    if (sizeBytes > 60 * 1024 * 1024) {
+        const link = `https://archive.org/download/${identifier}/${encodeURIComponent(pdfFile.name)}`;
+        const err = new Error(`PDF bohat badi hai (${(sizeBytes / (1024 * 1024)).toFixed(0)}MB) seedha bhejne ke liye. Manually download karein:\n${link}`);
+        err.tooLarge = true;
+        throw err;
+    }
+
+    const fileUrl = `https://archive.org/download/${identifier}/${encodeURIComponent(pdfFile.name)}`;
+    const fileRes = await fetch(fileUrl);
+    if (!fileRes.ok) throw new Error("PDF download nahi ho saki.");
+    const arrayBuffer = await fileRes.arrayBuffer();
+    return { buffer: Buffer.from(arrayBuffer), fileName: pdfFile.name };
+}
+
 // Generic downloader for Instagram/Facebook/Twitter — cobalt.tools's free
 // public API was shut down, so this now reuses yt-dlp (already bundled &
 // working reliably for the .yt command) which natively supports these
@@ -1029,7 +1054,7 @@ const MENU_CATEGORIES = {
     "🎉 FUN": ["truthordare", "compatibility", "riddle", "poll"],
     "🛠️ UTILITY": ["qr", "calc", "remind", "clearchat"],
     "👥 GROUP TOOLS": ["tagall", "kick", "antilink", "antidelete", "antiviewonce", "antibadword"],
-    "👑 OWNER": ["ban", "unban", "banlist", "block", "unblock", "sudo", "delsudo", "listsudo", "mode", "autoread", "broadcast"],
+    "👑 OWNER": ["ban", "unban", "banlist", "block", "unblock", "sudo", "delsudo", "listsudo", "mode", "autoread", "broadcast", "restart"],
     "⚙️ SETTINGS": [
         "welcome", "goodbye", "setwelcome", "setgoodbye",
         "editpath", "recording", "autotyping", "online", "autoreact", "anticall",
@@ -1217,6 +1242,28 @@ const allCommands = [
             }
             updateConfig(config, "MODE", choice);
             await sock.sendMessage(from, { text: `✅ Bot mode set to *${choice}*.` });
+        },
+    },
+    {
+        name: "restart",
+        aliases: ["reboot"],
+        description: "Owner only: bot ko restart karta hai (PM2 se). Usage: .restart",
+        async execute(sock, { from, msg, config }) {
+            if (!isOwner(msg, config)) {
+                await sock.sendMessage(from, { text: "❌ Sirf owner ye command use kar sakta hai." });
+                return;
+            }
+            await sock.sendMessage(from, { text: "🔄 Bot restart ho raha hai, thori dair mein wapis online aa jayega..." }, { quoted: msg });
+            const { exec } = require("child_process");
+            // Prefer pm2 (production). If pm2 isn't managing this process (e.g.
+            // running with plain `node index.js` in dev), fall back to just
+            // exiting — nodemon/manual restart would be needed in that case.
+            exec("pm2 restart Tasmee-Ai-Bot", (err) => {
+                if (err) {
+                    console.log("⚠️ pm2 restart failed, exiting process instead:", err.message);
+                    setTimeout(() => process.exit(0), 1000);
+                }
+            });
         },
     },
     {
@@ -2434,7 +2481,7 @@ const allCommands = [
     {
         name: "pdfsearch",
         aliases: ["bookfind", "findbook"],
-        description: "Free PDF/books dhoondein aur download link paayein. Usage: .pdfsearch <topic>",
+        description: "Free PDF/books dhoondein — number chunte hi seedha PDF file mil jayegi. Usage: .pdfsearch <topic>",
         async execute(sock, { from, args, msg }) {
             const query = args.join(" ").trim();
             if (!query) {
@@ -2451,11 +2498,13 @@ const allCommands = [
                     await sock.sendMessage(from, { text: `❌ "${query}" ke liye koi PDF/book nahi mila.` }, { quoted: msg });
                     return;
                 }
-                let list = `📚 *"${query}"* ke liye results:\n\n`;
+                let list = `📚 *"${query}"* ke top results:\n\n`;
                 docs.forEach((d, i) => {
-                    list += `${i + 1}️⃣ ${d.title}\n🔗 https://archive.org/details/${d.identifier}\n\n`;
+                    list += `${i + 1}️⃣ ${d.title}\n`;
                 });
-                list += `Link khol kar "PDF" wale option se download kar lein.`;
+                list += `\nReply karein *1-${docs.length}* — us book ki PDF seedha yahan bhej di jayegi.`;
+
+                module.exports.pendingPdfChoice.set(from, { results: docs.map((d) => ({ identifier: d.identifier, title: d.title })) });
                 await sock.sendMessage(from, { text: list }, { quoted: msg });
             } catch (err) {
                 await sock.sendMessage(from, { text: `❌ ${err.message}` }, { quoted: msg });
@@ -2630,7 +2679,20 @@ const allCommands = [
         async execute(sock, { from, args, msg }) {
             const targetLang = args[0];
             const text = args.slice(1).join(" ");
-            if (!targetLang || !text) return sock.sendMessage(from, { text: "Usage: .translate <language> <text>\nExample: .translate english mera naam ali hai" });
+            if (!targetLang || !text) {
+                return sock.sendMessage(from, {
+                    text:
+                        `🌐 *Translate Usage:*\n\n` +
+                        `*.translate <language> <text>*\n\n` +
+                        `*Example:*\n` +
+                        `.translate english mera naam ali hai\n` +
+                        `.translate urdu my name is ali\n` +
+                        `.translate arabic kaisay ho\n\n` +
+                        `*Supported languages (naam se likhein):*\n` +
+                        `english, urdu, arabic, hindi, french, spanish, german, chinese, punjabi, turkish, russian, japanese, korean, italian, portuguese, bengali, persian\n\n` +
+                        `(In ke ilawa bhi koi language likhoge to AI try karega samajhne ka.)`,
+                }, { quoted: msg });
+            }
 
             // Primary: Groq (best quality, understands Roman Urdu/mixed text well).
             // Fallback: free MyMemory API (no key needed) if every Groq key fails.
@@ -3049,6 +3111,8 @@ const allCommands = [
 module.exports = allCommands;
 module.exports.pendingYt = new Map();
 module.exports.pendingYtChoice = new Map();
+module.exports.pendingPdfChoice = new Map();
+module.exports.fetchArchivePdf = fetchArchivePdf;
 module.exports.pendingImage = new Map();
 module.exports.downloadYt = downloadYt;
 module.exports.isOwner = isOwner;
