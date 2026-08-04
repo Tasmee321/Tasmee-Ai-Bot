@@ -219,8 +219,19 @@ function restoreSessionFromEnv() {
 const islamicdbForAzaan = require("./lib/islamicdb");
 const prayerTimesCache = new Map(); // "city|YYYY-MM-DD" -> timings object
 
+function getPakistanDateKey() {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "Asia/Karachi",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+    }).formatToParts(new Date());
+    const val = (type) => parts.find((p) => p.type === type)?.value;
+    return `${val("year")}-${val("month")}-${val("day")}`;
+}
+
 async function getPrayerTimesCached(city) {
-    const dateKey = new Date().toISOString().slice(0, 10);
+    const dateKey = getPakistanDateKey();
     const cacheKey = `${city.toLowerCase()}|${dateKey}`;
     if (prayerTimesCache.has(cacheKey)) return prayerTimesCache.get(cacheKey);
     try {
@@ -242,8 +253,22 @@ function startAzaanScheduler() {
         if (!chatIds.length) return;
 
         const now = new Date();
-        const dateKey = now.toISOString().slice(0, 10);
-        const hhmm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+        // IMPORTANT: the server (Oracle Cloud) runs in UTC, but namaz timings
+        // from Aladhan are in Pakistan local time. Always compute the
+        // current date/time explicitly in Asia/Karachi so reminders fire at
+        // the correct real-world moment regardless of server timezone.
+        const pktParts = new Intl.DateTimeFormat("en-CA", {
+            timeZone: "Asia/Karachi",
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+            hour12: false,
+        }).formatToParts(now);
+        const partVal = (type) => pktParts.find((p) => p.type === type)?.value;
+        const dateKey = `${partVal("year")}-${partVal("month")}-${partVal("day")}`;
+        const hhmm = `${partVal("hour")}:${partVal("minute")}`;
         const PRAYERS = [
             ["Fajr", "🌅"],
             ["Dhuhr", "☀️"],
@@ -657,6 +682,30 @@ async function startBot() {
                 }
                 // Not a valid number — let it fall through so a normal
                 // message/other pending flow can still be handled.
+            }
+
+            // Check if this is a reply picking a number from a PDF/book
+            // search results list (.pdfsearch).
+            const pendingPdf = commandList.pendingPdfChoice?.get(from);
+            if (pendingPdf) {
+                const num = parseInt(text.trim(), 10);
+                if (!isNaN(num) && num >= 1 && num <= pendingPdf.results.length) {
+                    commandList.pendingPdfChoice.delete(from);
+                    const chosen = pendingPdf.results[num - 1];
+                    try {
+                        await sock.sendMessage(from, { text: `📥 *${chosen.title}* download ho rahi hai...` });
+                        const { buffer, fileName } = await commandList.fetchArchivePdf(chosen.identifier);
+                        await sock.sendMessage(from, {
+                            document: buffer,
+                            fileName: fileName.endsWith(".pdf") ? fileName : `${fileName}.pdf`,
+                            mimetype: "application/pdf",
+                            caption: `📚 ${chosen.title}`,
+                        });
+                    } catch (err) {
+                        await sock.sendMessage(from, { text: `❌ ${err.message}` });
+                    }
+                    return;
+                }
             }
 
             // Check if this is a reply to a pending "audio or video?" question
