@@ -605,6 +605,149 @@ const AI_TOOLS = [
             },
         },
     },
+    {
+        type: "function",
+        function: {
+            name: "get_prayer_times",
+            description: "Get today's namaz/prayer timings (Fajr, Zuhr, Asr, Maghrib, Isha) for a city and send them.",
+            parameters: {
+                type: "object",
+                properties: { city: { type: "string", description: "City name; omit for the user's default city" } },
+            },
+        },
+    },
+    {
+        type: "function",
+        function: {
+            name: "get_qibla_direction",
+            description: "Get the Qibla direction (in degrees) for a city and send it.",
+            parameters: {
+                type: "object",
+                properties: { city: { type: "string", description: "City name; omit for the user's default city" } },
+            },
+        },
+    },
+    {
+        type: "function",
+        function: {
+            name: "get_hijri_date",
+            description: "Get today's Islamic (Hijri) calendar date and send it.",
+            parameters: { type: "object", properties: {} },
+        },
+    },
+    {
+        type: "function",
+        function: {
+            name: "get_quran_ayat",
+            description: "Get info about a Quran Surah, or a specific ayat with Urdu translation, and send it.",
+            parameters: {
+                type: "object",
+                properties: {
+                    surah: { type: "string", description: "Surah number (1-114)" },
+                    ayat: { type: "string", description: "Specific ayat number within the surah (optional)" },
+                },
+                required: ["surah"],
+            },
+        },
+    },
+    {
+        type: "function",
+        function: {
+            name: "get_hadith",
+            description: "Get a random authentic Hadith and send it.",
+            parameters: {
+                type: "object",
+                properties: { book: { type: "string", description: "bukhari, muslim, or tirmidhi; omit for bukhari" } },
+            },
+        },
+    },
+    {
+        type: "function",
+        function: {
+            name: "get_dua",
+            description: "Send an everyday Islamic dua (Arabic + transliteration + meaning), or the full list if no number given.",
+            parameters: {
+                type: "object",
+                properties: { number: { type: "string", description: "Dua number from the list; omit to show the list" } },
+            },
+        },
+    },
+    {
+        type: "function",
+        function: {
+            name: "tasbeeh_counter",
+            description: "Increment, set, or reset the user's personal tasbeeh/zikr counter and send the current count.",
+            parameters: {
+                type: "object",
+                properties: {
+                    action: { type: "string", enum: ["increment", "reset"], description: "increment by 1 (or by 'amount'), or reset to 0" },
+                    amount: { type: "string", description: "How much to increment by; omit for 1" },
+                },
+                required: ["action"],
+            },
+        },
+    },
+    {
+        type: "function",
+        function: {
+            name: "get_asmaulhusna",
+            description: "Send one of Allah's 99 Names (Asma-ul-Husna), by number or a random one.",
+            parameters: {
+                type: "object",
+                properties: { number: { type: "string", description: "Number 1-99; omit for a random name" } },
+            },
+        },
+    },
+    {
+        type: "function",
+        function: {
+            name: "get_sehri_iftar",
+            description: "Get Sehri (end time) and Iftar (Maghrib) timings for a city and send them.",
+            parameters: {
+                type: "object",
+                properties: { city: { type: "string", description: "City name; omit for the user's default city" } },
+            },
+        },
+    },
+    {
+        type: "function",
+        function: {
+            name: "set_azaan_reminder",
+            description: "Turn on or off automatic azaan/namaz-time reminders for this chat.",
+            parameters: {
+                type: "object",
+                properties: {
+                    action: { type: "string", enum: ["on", "off"] },
+                    city: { type: "string", description: "City for reminder timings, only needed when turning on" },
+                },
+                required: ["action"],
+            },
+        },
+    },
+    {
+        type: "function",
+        function: {
+            name: "search_pdf_book",
+            description: "Search for free PDFs/books on a topic and send download links.",
+            parameters: {
+                type: "object",
+                properties: { query: { type: "string", description: "Topic or book name to search for" } },
+                required: ["query"],
+            },
+        },
+    },
+    {
+        type: "function",
+        function: {
+            name: "solve_homework",
+            description: "Solve a homework/study question step-by-step and send a clear explanation.",
+            parameters: {
+                type: "object",
+                properties: { question: { type: "string", description: "The question to solve" } },
+                required: ["question"],
+            },
+        },
+    },
 ];
 
 // Runs the real command behind an AI tool call and returns a short status
@@ -652,6 +795,70 @@ async function runAiTool(sock, { from, msg, config }, toolName, toolArgs) {
                 if (cmd) await cmd.execute(sock, { from, args: (toolArgs.query || "").split(" "), config, msg });
                 return "Web search ka jawab bhej diya.";
             }
+            case "get_prayer_times": {
+                const cmd = findCmd("prayertimes");
+                if (cmd) await cmd.execute(sock, { from, args: toolArgs.city ? toolArgs.city.split(" ") : [], msg });
+                return "Namaz timings bhej din.";
+            }
+            case "get_qibla_direction": {
+                const cmd = findCmd("qibla");
+                if (cmd) await cmd.execute(sock, { from, args: toolArgs.city ? toolArgs.city.split(" ") : [], msg });
+                return "Qibla direction bhej di.";
+            }
+            case "get_hijri_date": {
+                const cmd = findCmd("hijri");
+                if (cmd) await cmd.execute(sock, { from, msg });
+                return "Hijri date bhej di.";
+            }
+            case "get_quran_ayat": {
+                const cmd = findCmd("quran");
+                const args = [toolArgs.surah || "1"];
+                if (toolArgs.ayat) args.push(toolArgs.ayat);
+                if (cmd) await cmd.execute(sock, { from, args, msg });
+                return "Quran info bhej di.";
+            }
+            case "get_hadith": {
+                const cmd = findCmd("hadith");
+                if (cmd) await cmd.execute(sock, { from, args: toolArgs.book ? [toolArgs.book] : [], msg });
+                return "Hadith bhej di.";
+            }
+            case "get_dua": {
+                const cmd = findCmd("dua");
+                if (cmd) await cmd.execute(sock, { from, args: toolArgs.number ? [toolArgs.number] : [], msg });
+                return "Dua bhej di.";
+            }
+            case "tasbeeh_counter": {
+                const cmd = findCmd("tasbeeh");
+                const args = toolArgs.action === "reset" ? ["reset"] : [toolArgs.amount || "1"];
+                if (cmd) await cmd.execute(sock, { from, args, msg });
+                return "Tasbeeh count update kar di.";
+            }
+            case "get_asmaulhusna": {
+                const cmd = findCmd("asmaulhusna");
+                if (cmd) await cmd.execute(sock, { from, args: toolArgs.number ? [toolArgs.number] : [], msg });
+                return "Allah ka naam bhej diya.";
+            }
+            case "get_sehri_iftar": {
+                const cmd = findCmd("sehriiftar");
+                if (cmd) await cmd.execute(sock, { from, args: toolArgs.city ? toolArgs.city.split(" ") : [], msg });
+                return "Sehri/Iftar timings bhej din.";
+            }
+            case "set_azaan_reminder": {
+                const cmd = findCmd("azaan");
+                const args = toolArgs.action === "on" ? ["on", ...(toolArgs.city ? toolArgs.city.split(" ") : [])] : ["off"];
+                if (cmd) await cmd.execute(sock, { from, args, msg });
+                return "Azaan reminder update kar diya.";
+            }
+            case "search_pdf_book": {
+                const cmd = findCmd("pdfsearch");
+                if (cmd) await cmd.execute(sock, { from, args: (toolArgs.query || "").split(" "), msg });
+                return "PDF/book results bhej diye.";
+            }
+            case "solve_homework": {
+                const cmd = findCmd("homework");
+                if (cmd) await cmd.execute(sock, { from, args: (toolArgs.question || "").split(" "), msg });
+                return "Homework solve kar ke bhej diya.";
+            }
             default:
                 return "Yeh tool mojood nahi.";
         }
@@ -668,6 +875,9 @@ async function runAiTool(sock, { from, msg, config }, toolName, toolArgs) {
 const KNOWN_TOOL_NAMES = [
     "download_media", "find_or_generate_image", "text_to_voice", "stylish_text_image",
     "get_weather", "get_news", "pinterest_images", "web_search",
+    "get_prayer_times", "get_qibla_direction", "get_hijri_date", "get_quran_ayat",
+    "get_hadith", "get_dua", "tasbeeh_counter", "get_asmaulhusna", "get_sehri_iftar",
+    "set_azaan_reminder", "search_pdf_book", "solve_homework",
 ];
 
 // Some models occasionally print a fake/malformed function-call as plain
