@@ -211,6 +211,72 @@ function restoreSessionFromEnv() {
 }
 
 // ============================================
+// Azaan reminder scheduler — checks every minute whether it's namaz time
+// for any subscribed chat (.azaan on <city>) and sends a one-time reminder
+// per prayer per day. Prayer times are cached per city per day so we don't
+// hammer the Aladhan API every minute.
+// ============================================
+const islamicdbForAzaan = require("./lib/islamicdb");
+const prayerTimesCache = new Map(); // "city|YYYY-MM-DD" -> timings object
+
+async function getPrayerTimesCached(city) {
+    const dateKey = new Date().toISOString().slice(0, 10);
+    const cacheKey = `${city.toLowerCase()}|${dateKey}`;
+    if (prayerTimesCache.has(cacheKey)) return prayerTimesCache.get(cacheKey);
+    try {
+        const res = await fetch(`https://api.aladhan.com/v1/timingsByCity?city=${encodeURIComponent(city)}&country=Pakistan&method=1`);
+        const data = await res.json();
+        const t = data?.data?.timings || null;
+        prayerTimesCache.set(cacheKey, t);
+        return t;
+    } catch {
+        return null;
+    }
+}
+
+function startAzaanScheduler() {
+    setInterval(async () => {
+        if (!sockRef) return;
+        const subs = islamicdbForAzaan.getAzaanSubs();
+        const chatIds = Object.keys(subs);
+        if (!chatIds.length) return;
+
+        const now = new Date();
+        const dateKey = now.toISOString().slice(0, 10);
+        const hhmm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+        const PRAYERS = [
+            ["Fajr", "🌅"],
+            ["Dhuhr", "☀️"],
+            ["Asr", "🌤️"],
+            ["Maghrib", "🌇"],
+            ["Isha", "🌙"],
+        ];
+
+        for (const chatId of chatIds) {
+            const sub = subs[chatId];
+            if (!sub?.city) continue;
+            const timings = await getPrayerTimesCached(sub.city);
+            if (!timings) continue;
+
+            for (const [name, emoji] of PRAYERS) {
+                const raw = (timings[name] || "").slice(0, 5); // "HH:MM"
+                if (!raw || raw !== hhmm) continue;
+                if (sub.lastSent?.[name] === dateKey) continue; // already sent today
+                try {
+                    await sockRef.sendMessage(chatId, {
+                        text: `${emoji} *${name} ki Namaz ka waqt ho gaya hai!*\n📍 ${sub.city}\n⏰ ${raw}`,
+                    });
+                } catch (err) {
+                    console.log(`⚠️ Azaan reminder send failed for ${chatId}:`, err.message);
+                }
+                islamicdbForAzaan.markAzaanSent(chatId, name, dateKey);
+            }
+        }
+    }, 60 * 1000);
+}
+startAzaanScheduler();
+
+// ============================================
 // Shared AI reply helper — used for both normal text auto-chat and
 // transcribed voice-note replies, so they behave identically and both
 // benefit from per-chat memory (recent history + remembered name).
@@ -562,6 +628,37 @@ async function startBot() {
         }
 
         if (!text.startsWith(PREFIX)) {
+            // Check if this is a reply picking a number from a YouTube search
+            // results list (from .yt / .audio / .video / AI song requests).
+            const pendingChoice = commandList.pendingYtChoice?.get(from);
+            if (pendingChoice) {
+                const num = parseInt(text.trim(), 10);
+                if (!isNaN(num) && num >= 1 && num <= pendingChoice.results.length) {
+                    commandList.pendingYtChoice.delete(from);
+                    const chosen = pendingChoice.results[num - 1];
+                    const target = `https://www.youtube.com/watch?v=${chosen.id}`;
+
+                    if (pendingChoice.wantsVideo === true || pendingChoice.wantsVideo === false) {
+                        await commandList.downloadYt(sock, {
+                            from,
+                            msg,
+                            target,
+                            label: chosen.title,
+                            wantsVideo: pendingChoice.wantsVideo,
+                            config,
+                        });
+                    } else {
+                        commandList.pendingYt.set(from, { target, label: chosen.title });
+                        await sock.sendMessage(from, {
+                            text: `🎬 Download *${chosen.title}* as:\n\n1️⃣ Reply *audio*\n2️⃣ Reply *video*`,
+                        });
+                    }
+                    return;
+                }
+                // Not a valid number — let it fall through so a normal
+                // message/other pending flow can still be handled.
+            }
+
             // Check if this is a reply to a pending "audio or video?" question
             const pending = commandList.pendingYt?.get(from);
             const choice = text.trim().toLowerCase();
