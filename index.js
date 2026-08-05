@@ -22,6 +22,50 @@ const config = require("./config");
 const memory = require("./lib/memory");
 const groq = require("./lib/groq");
 
+// ============================================
+// Crash-safety net. Without this, a single unhandled promise rejection
+// anywhere (even deep inside a dependency, not our own code) kills the
+// whole Node process — PM2 then restarts it, which can interrupt an
+// in-progress write to the session/ auth files and corrupt them. That
+// corruption is what actually causes real "Bad MAC" / session errors
+// later on, not just noise from them. This makes sure the process only
+// ever dies on purpose, never by accident.
+// ============================================
+process.on("unhandledRejection", (reason) => {
+    console.log("⚠️ Unhandled promise rejection (ignored, bot keeps running):", reason?.message || reason);
+});
+process.on("uncaughtException", (err) => {
+    console.log("⚠️ Uncaught exception (ignored, bot keeps running):", err?.message || err);
+});
+
+// ============================================
+// libsignal (the low-level crypto lib Baileys uses under the hood) logs
+// "Session error: Bad MAC" straight to the console itself, bypassing the
+// pino logger we pass to makeWASocket (set to "silent" below) entirely —
+// so it can't be turned off through Baileys' own options.
+//
+// This specific error is normal, expected noise in any Baileys bot: it
+// fires whenever an incoming message's encryption session is out of sync
+// (missed messages while offline, sender reinstalled WhatsApp, a big
+// group's key state drifting, etc.), and Baileys/libsignal recover from
+// it automatically by requesting a fresh prekey bundle — that's what the
+// "Closing open session in favor of incoming prekey bundle" line means.
+// It does NOT mean the bot crashed or that messages stopped working.
+//
+// We only filter this one known-benign pattern so it stops drowning out
+// real errors in `pm2 logs --err` — everything else still prints as-is.
+// ============================================
+const NOISY_LIBSIGNAL_PATTERNS = [/^Session error:Error: Bad MAC/, /^Failed to decrypt message with any known session/];
+const originalConsoleLog = console.log;
+const originalConsoleError = console.error;
+const filterNoisyLog = (original) => (...args) => {
+    const first = typeof args[0] === "string" ? args[0] : "";
+    if (NOISY_LIBSIGNAL_PATTERNS.some((re) => re.test(first))) return;
+    original(...args);
+};
+console.log = filterNoisyLog(originalConsoleLog);
+console.error = filterNoisyLog(originalConsoleError);
+
 const SESSION_FOLDER = "./session";
 const PREFIX = config.PREFIX || ".";
 
@@ -302,6 +346,41 @@ function startAzaanScheduler() {
 startAzaanScheduler();
 
 // ============================================
+// Reads the text of whichever message the incoming message is quoting
+// (replying to), if any. WhatsApp/Baileys stores this under
+// contextInfo.quotedMessage on the message type that was actually sent
+// (extendedTextMessage for a text reply, but also image/video/audio
+// messages when someone replies with a caption). Returns null if this
+// message isn't a reply to anything.
+// ============================================
+function getQuotedText(msg) {
+    const contextInfo =
+        msg.message?.extendedTextMessage?.contextInfo ||
+        msg.message?.imageMessage?.contextInfo ||
+        msg.message?.videoMessage?.contextInfo ||
+        msg.message?.audioMessage?.contextInfo ||
+        msg.message?.documentMessage?.contextInfo ||
+        msg.message?.buttonsResponseMessage?.contextInfo ||
+        msg.message?.listResponseMessage?.contextInfo;
+
+    const quoted = contextInfo?.quotedMessage;
+    if (!quoted) return null;
+
+    return (
+        quoted.conversation ||
+        quoted.extendedTextMessage?.text ||
+        quoted.imageMessage?.caption ||
+        quoted.videoMessage?.caption ||
+        quoted.documentMessage?.caption ||
+        (quoted.audioMessage ? "[voice note / audio message]" : null) ||
+        (quoted.stickerMessage ? "[sticker]" : null) ||
+        (quoted.imageMessage ? "[image, no caption]" : null) ||
+        (quoted.videoMessage ? "[video, no caption]" : null) ||
+        null
+    );
+}
+
+// ============================================
 // Shared AI reply helper — used for both normal text auto-chat and
 // transcribed voice-note replies, so they behave identically and both
 // benefit from per-chat memory (recent history + remembered name).
@@ -317,6 +396,15 @@ async function getAiReply(text, from, sock, msg) {
     let systemPrompt = await commandsModule.buildSystemPrompt(config.AI_PERSONA || "", text);
     if (name) systemPrompt += `\n\nThe user's name in this chat is "${name}" — you were told this earlier, use it naturally when it fits.`;
 
+    // If this message is a reply to an earlier message (quoted/swipe-reply),
+    // tell the AI what that earlier message said so it actually understands
+    // what "yeh", "iska", "isko" etc. are pointing at instead of guessing.
+    const quotedText = msg ? getQuotedText(msg) : null;
+    if (quotedText) {
+        systemPrompt += `\n\nThe user is replying directly to an earlier message in the chat. That earlier (quoted) message said: "${quotedText}"\nUse it as context to understand what the user's new message is referring to.`;
+    }
+    const aiInputText = quotedText ? `[Reply to: "${quotedText}"]\n${text}` : text;
+
     let answer = null;
     try {
         if (hasGroqKey && sock && msg) {
@@ -328,7 +416,7 @@ async function getAiReply(text, from, sock, msg) {
                 config,
                 systemPrompt,
                 history,
-                question: text,
+                question: aiInputText,
             });
         } else if (geminiKey) {
             const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`;
@@ -344,7 +432,7 @@ async function getAiReply(text, from, sock, msg) {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                     system_instruction: { parts: [{ text: systemPrompt }] },
-                    contents: [...geminiHistory, { role: "user", parts: [{ text }] }],
+                    contents: [...geminiHistory, { role: "user", parts: [{ text: aiInputText }] }],
                 }),
                 signal: controller.signal,
             });
@@ -356,7 +444,7 @@ async function getAiReply(text, from, sock, msg) {
                 messages: [
                     { role: "system", content: systemPrompt || "You are a helpful assistant." },
                     ...history,
-                    { role: "user", content: text },
+                    { role: "user", content: aiInputText },
                 ],
             });
             answer = data.choices?.[0]?.message?.content;
