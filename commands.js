@@ -333,8 +333,51 @@ function isOwner(msg, config) {
     return ownerNumbers.some((num) => num && (senderDigits === num || senderDigits.endsWith(num)));
 }
 
-async function downloadYt(sock, { from, msg, target, label, wantsVideo, config }) {
+// "Sign in to confirm you're not a bot" / cookie related YouTube errors —
+// these mean YouTube's anti-bot check rejected this attempt, not that the
+// video itself is unavailable. Worth retrying with a different player
+// client before giving up.
+const YT_BOT_CHECK_REGEX = /sign in to confirm|not a bot|cookies/i;
+
+function buildYtdlpArgs({ format, outTemplate, wantsVideo, target, useCookies, playerClient }) {
+    const args = [
+        "-f",
+        format,
+        "-o",
+        outTemplate,
+        "--no-playlist",
+        "--geo-bypass",
+        "--no-check-certificates",
+    ];
+    if (useCookies) {
+        args.push("--cookies", path.join(__dirname, "cookies.txt"));
+    }
+    if (playerClient) {
+        args.push("--extractor-args", `youtube:player_client=${playerClient}`);
+    }
+    args.push("--js-runtimes", "bun");
+    if (!wantsVideo) {
+        args.push("--extract-audio", "--audio-format", "mp3", "--audio-quality", "0");
+    }
+    args.push(target);
+    return args;
+}
+
+function runYtDlpOnce(args) {
     const { spawn } = require("child_process");
+    return new Promise((resolve, reject) => {
+        const proc = spawn("/usr/local/bin/yt-dlp", args, { env: process.env });
+        let stderr = "";
+        proc.stderr.on("data", (d) => (stderr += d.toString()));
+        proc.on("error", (err) => reject(new Error(`yt-dlp not found or failed to start: ${err.message}`)));
+        proc.on("close", (code) => {
+            if (code === 0) resolve();
+            else reject(new Error(stderr.slice(-500) || `yt-dlp exited with code ${code}`));
+        });
+    });
+}
+
+async function downloadYt(sock, { from, msg, target, label, wantsVideo, config }) {
     const os = require("os");
 
     const jobId = `yt_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
@@ -344,36 +387,52 @@ async function downloadYt(sock, { from, msg, target, label, wantsVideo, config }
 
     await sock.sendMessage(from, { text: `⏳ Downloading *${label}* as ${wantsVideo ? "video" : "audio"}, please wait...` });
 
-    const ytdlpArgs = [
-        "-f",
-        format,
-        "-o",
-        outTemplate,
-        "--no-playlist",
-        "--geo-bypass",
-        "--no-check-certificates",
-        "--cookies",
-        path.join(__dirname, "cookies.txt"),
-        "--js-runtimes",
-        "bun",
-        ...(wantsVideo ? [] : ["--extract-audio", "--audio-format", "mp3", "--audio-quality", "0"]),
-        target,
+    // Attempt order: cookies first (best for age/region-locked videos), then
+    // retry with android/ios player clients without cookies — these clients
+    // frequently dodge the "Sign in to confirm you're not a bot" wall that
+    // datacenter IPs (Oracle Cloud etc.) get hit with, even with valid cookies.
+    const attempts = [
+        { useCookies: true, playerClient: null },
+        { useCookies: false, playerClient: "android" },
+        { useCookies: false, playerClient: "ios" },
     ];
 
-    const runYtDlp = () =>
-        new Promise((resolve, reject) => {
-            const proc = spawn("/usr/local/bin/yt-dlp", ytdlpArgs, { env: process.env });
-            let stderr = "";
-            proc.stderr.on("data", (d) => (stderr += d.toString()));
-            proc.on("error", (err) => reject(new Error(`yt-dlp not found or failed to start: ${err.message}`)));
-            proc.on("close", (code) => {
-                if (code === 0) resolve();
-                else reject(new Error(stderr.slice(-500) || `yt-dlp exited with code ${code}`));
-            });
-        });
+    let lastErr = null;
+    for (const attempt of attempts) {
+        const args = buildYtdlpArgs({ format, outTemplate, wantsVideo, target, ...attempt });
+        try {
+            await runYtDlpOnce(args);
+            lastErr = null;
+            break;
+        } catch (err) {
+            lastErr = err;
+            const isBotCheck = YT_BOT_CHECK_REGEX.test(err.message);
+            console.log(
+                `❌ YT download attempt failed (cookies=${attempt.useCookies}, client=${attempt.playerClient || "default"}):`,
+                err.message
+            );
+            // Only worth retrying with another client if it looks like a
+            // bot-check/cookie problem — a genuinely unavailable/private
+            // video will fail the same way on every client, so don't waste
+            // three attempts on that case.
+            if (!isBotCheck) break;
+        }
+    }
+
+    if (lastErr) {
+        console.log("❌ YT download error (all attempts exhausted):", lastErr.message);
+        if (isOwner(msg, config)) {
+            const hint = YT_BOT_CHECK_REGEX.test(lastErr.message)
+                ? "\n\n💡 YouTube ka bot-check tripped ho raha hai — cookies.txt shayad expire ho chuki hai. Ek real browser se (logged-in YouTube account) fresh cookies export karke cookies.txt replace karein, aur yt-dlp binary bhi update karein (`yt-dlp -U` ya Docker image rebuild)."
+                : "";
+            await sock.sendMessage(from, { text: `❌ Download failed: ${lastErr.message}${hint}` });
+        } else {
+            await sock.sendMessage(from, { text: "❌ Sorry, couldn't download that right now. Please try again later." });
+        }
+        return;
+    }
 
     try {
-        await runYtDlp();
         const matchFile = fs.readdirSync(tmpDir).find((f) => f.startsWith(jobId));
         if (!matchFile) throw new Error("Download finished but output file was not found.");
         const filePath = path.join(tmpDir, matchFile);
@@ -387,7 +446,7 @@ async function downloadYt(sock, { from, msg, target, label, wantsVideo, config }
         }
         fs.unlink(filePath, () => {});
     } catch (err) {
-        console.log("❌ YT download error:", err.message);
+        console.log("❌ YT post-download error:", err.message);
         if (isOwner(msg, config)) {
             await sock.sendMessage(from, { text: `❌ Download failed: ${err.message}` });
         } else {
