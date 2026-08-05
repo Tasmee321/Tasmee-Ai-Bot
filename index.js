@@ -1160,3 +1160,27 @@ http.createServer(async (req, res) => {
 });
 
 startBot();
+
+// ============================================
+// Keep yt-dlp itself up to date automatically. YouTube changes its
+// anti-bot checks constantly, and an old yt-dlp binary is one of the
+// most common reasons downloads suddenly start failing with
+// "Sign in to confirm you're not a bot" even with fresh cookies — the
+// Dockerfile only pulls "latest" once, at image build time, and then
+// it's frozen until the image is rebuilt. This runs an update on
+// startup and once a day after that so it never silently goes stale
+// on a long-running server.
+// ============================================
+function updateYtDlp() {
+    const { spawn } = require("child_process");
+    const proc = spawn("/usr/local/bin/yt-dlp", ["-U"]);
+    let out = "";
+    proc.stdout.on("data", (d) => (out += d.toString()));
+    proc.stderr.on("data", (d) => (out += d.toString()));
+    proc.on("close", () => {
+        console.log("🔄 yt-dlp self-update check:", out.trim().split("\n").pop());
+    });
+    proc.on("error", () => {}); // binary not found — silently skip, downloadYt will surface it if actually used
+}
+updateYtDlp();
+setInterval(updateYtDlp, 24 * 60 * 60 * 1000);
