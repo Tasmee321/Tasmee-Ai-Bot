@@ -391,10 +391,14 @@ async function downloadYt(sock, { from, msg, target, label, wantsVideo, config }
     // retry with android/ios player clients without cookies — these clients
     // frequently dodge the "Sign in to confirm you're not a bot" wall that
     // datacenter IPs (Oracle Cloud etc.) get hit with, even with valid cookies.
+    // Note: deliberately NOT using player_client=ios — it has a known
+    // "cookie trap" where it silently ignores/mishandles cookies and
+    // fails the same bot-check regardless, wasting a retry. web+mweb+android
+    // combined lets yt-dlp pick whichever one YouTube currently trusts.
     const attempts = [
         { useCookies: true, playerClient: null },
-        { useCookies: false, playerClient: "android" },
-        { useCookies: false, playerClient: "ios" },
+        { useCookies: true, playerClient: "web,mweb,android" },
+        { useCookies: false, playerClient: "web,mweb,android" },
     ];
 
     let lastErr = null;
