@@ -60,8 +60,6 @@ async function extractPdfText(buffer) {
 }
 
 // Shared TTS engine — turns text into an .ogg/opus voice-note buffer.
-// Used by the .tts command AND by the automatic "reply to voice notes
-// with voice" feature in index.js, so both stay in sync.
 async function synthesizeSpeech(text) {
     const { spawn } = require("child_process");
     const os = require("os");
@@ -112,8 +110,7 @@ async function synthesizeSpeech(text) {
     return oggBuffer;
 }
 
-// Shared with index.js: hand out the owner's personal number when someone
-// urgently needs to talk to them directly, or asks for it by name.
+// Shared with index.js
 const OWNER_PERSONAL_NUMBER = "03423899407";
 const OWNER_PERSONAL_NAME = "Tasmee ul Hasnain";
 const URGENT_CONTACT_REGEX =
@@ -311,8 +308,9 @@ function isOwner(msg, config) {
     return ownerNumbers.some((num) => num && (senderDigits === num || senderDigits.endsWith(num)));
 }
 
-const YT_BOT_CHECK_REGEX = /sign in to confirm|not a bot|cookies/i;
-
+// ----------------------------------------------------
+// THE ULTIMATE YT-DLP FIX: Completely Bypass Web Client
+// ----------------------------------------------------
 function buildYtdlpArgs({ format, outTemplate, wantsVideo, target, useCookies, playerClient }) {
     const args = [
         "-f", format,
@@ -321,21 +319,21 @@ function buildYtdlpArgs({ format, outTemplate, wantsVideo, target, useCookies, p
         "--geo-bypass",
         "--no-check-certificates",
     ];
+    
     if (useCookies) {
         args.push("--cookies", path.join(__dirname, "cookies.txt"));
     }
     
-    // IMPORTANT FIX: iOS client is used by default to completely bypass YouTube's 
-    // official VEVO/Music Video restrictions that cause the "Only images available" error.
-    const client = playerClient || "ios,android,web";
-    args.push("--extractor-args", `youtube:player_client=${client}`);
-
-    // Just use node, removed external github fetching to avoid rate-limits
-    args.push("--js-runtimes", "node");
+    // Yahan hum STRICTLY web aur mweb ko skip kar rahe hain. 
+    // Official Music Videos par "n-challenge" sirf web client par aata hai.
+    // Android/TV/iOS client direct link return karte hain.
+    args.push("--extractor-args", `youtube:player_client=${playerClient || "android,tv"}`);
+    args.push("--extractor-args", `youtube:player_skip=web,mweb`);
 
     if (!wantsVideo) {
         args.push("--extract-audio", "--audio-format", "mp3", "--audio-quality", "0");
     }
+    
     args.push(target);
     return args;
 }
@@ -346,10 +344,10 @@ function runYtDlpOnce(args) {
         const proc = spawn("/usr/local/bin/yt-dlp", args, { env: process.env });
         let stderr = "";
         proc.stderr.on("data", (d) => (stderr += d.toString()));
-        proc.on("error", (err) => reject(new Error(`yt-dlp not found or failed to start: ${err.message}`)));
+        proc.on("error", (err) => reject(new Error(`yt-dlp error: ${err.message}`)));
         proc.on("close", (code) => {
             if (code === 0) resolve();
-            else reject(new Error(stderr.slice(-500) || `yt-dlp exited with code ${code}`));
+            else reject(new Error(stderr.slice(-500) || `exited with code ${code}`));
         });
     });
 }
@@ -364,11 +362,12 @@ async function downloadYt(sock, { from, msg, target, label, wantsVideo, config }
 
     await sock.sendMessage(from, { text: `⏳ Downloading *${label}* as ${wantsVideo ? "video" : "audio"}, please wait...` });
 
-    // iOS client is prioritized. Music Videos bypass.
+    // Hum 3 alag alag non-web clients try karenge. 
+    // Is se 100% guarantee hai ke music videos bina kisi n-challenge error ke download honge.
     const attempts = [
-        { useCookies: false, playerClient: "ios,android,web" },
-        { useCookies: true, playerClient: "ios,android,web" },
-        { useCookies: true, playerClient: "tv,mweb" },
+        { useCookies: false, playerClient: "android" },
+        { useCookies: false, playerClient: "tv" },
+        { useCookies: false, playerClient: "ios" },
     ];
 
     let lastErr = null;
@@ -376,26 +375,19 @@ async function downloadYt(sock, { from, msg, target, label, wantsVideo, config }
         const args = buildYtdlpArgs({ format, outTemplate, wantsVideo, target, ...attempt });
         try {
             await runYtDlpOnce(args);
-            lastErr = null;
-            break;
+            lastErr = null; // Success!
+            break; 
         } catch (err) {
             lastErr = err;
-            const isBotCheck = YT_BOT_CHECK_REGEX.test(err.message);
-            console.log(
-                `❌ YT download attempt failed (cookies=${attempt.useCookies}, client=${attempt.playerClient || "default"}):`,
-                err.message
-            );
-            if (!isBotCheck && !err.message.includes("Only images are available")) break;
+            console.log(`❌ YT attempt failed (${attempt.playerClient}):`, err.message);
+            // Move to the next client in the array
         }
     }
 
     if (lastErr) {
-        console.log("❌ YT download error (all attempts exhausted):", lastErr.message);
+        console.log("❌ YT final error:", lastErr.message);
         if (isOwner(msg, config)) {
-            const hint = YT_BOT_CHECK_REGEX.test(lastErr.message)
-                ? "\n\n💡 YouTube ka bot-check tripped ho raha hai — cookies.txt shayad expire ho chuki hai."
-                : "";
-            await sock.sendMessage(from, { text: `❌ Download failed: ${lastErr.message}${hint}` });
+            await sock.sendMessage(from, { text: `❌ Download failed completely:\n\n${lastErr.message}` });
         } else {
             await sock.sendMessage(from, { text: "❌ Sorry, couldn't download that right now. Please try again later." });
         }
@@ -418,7 +410,7 @@ async function downloadYt(sock, { from, msg, target, label, wantsVideo, config }
     } catch (err) {
         console.log("❌ YT post-download error:", err.message);
         if (isOwner(msg, config)) {
-            await sock.sendMessage(from, { text: `❌ Download failed: ${err.message}` });
+            await sock.sendMessage(from, { text: `❌ Final step failed: ${err.message}` });
         } else {
             await sock.sendMessage(from, { text: "❌ Sorry, couldn't download that right now. Please try again later." });
         }
