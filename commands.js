@@ -355,8 +355,8 @@ function buildYtdlpArgs({ format, outTemplate, wantsVideo, target, useCookies, p
     if (playerClient) {
         args.push("--extractor-args", `youtube:player_client=${playerClient}`);
     }
-    // Switched to deno runtime for robust EJS n-challenge solving.
-    args.push("--js-runtimes", "deno");
+    // Using explicit global Deno path for robust EJS n-challenge solving
+    args.push("--js-runtimes", "deno:/usr/local/bin/deno");
     args.push("--remote-components", "ejs:github");
     if (!wantsVideo) {
         args.push("--extract-audio", "--audio-format", "mp3", "--audio-quality", "0");
@@ -3162,7 +3162,7 @@ const allCommands = [
                 const items = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)].slice(0, 4);
                 const decode = (s) => (s || "").replace(/<!\[CDATA\[/g, "").replace(/\]\]>/g, "").replace(/&amp;/g, "&").replace(/&#39;/g, "'").replace(/&quot;/g, '"');
                 const lines = items.map((m) => `🪙 ${decode(m[1].match(/<title>(.*?)<\/title>/)?.[1] || "")}`);
-                await sock.sendMessage(from, { text: `🪙 *Gold Rate Updates*\n\n${lines.join("\n\n") || "Nahi mili."}\n\n_(Ye news headlines hain — exact rate confirm kar lein.)_` }, { quoted: msg });
+                await sock.sendMessage(from, { text: `🪙 *Gold Rate Updates*\n\n${lines.join("\n\n") || "Nahi mila."}\n\n_(Ye news headlines hain — exact rate confirm kar lein.)_` }, { quoted: msg });
             } catch (err) {
                 await sock.sendMessage(from, { text: `❌ ${err.message}` }, { quoted: msg });
             }
