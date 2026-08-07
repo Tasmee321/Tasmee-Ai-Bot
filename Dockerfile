@@ -14,13 +14,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
-# Install latest yt-dlp with EJS support
+# Install latest yt-dlp
 RUN python3 -m pip install --no-cache-dir --upgrade pip && \
     python3 -m pip install --no-cache-dir "yt-dlp[default]"
-
-# Install Deno globally for yt-dlp challenge solving
-RUN curl -fsSL https://deno.land/install.sh | sh && \
-    cp /root/.deno/bin/deno /usr/local/bin/deno
 
 # Copy package files
 COPY package*.json ./
