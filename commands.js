@@ -355,7 +355,12 @@ function buildYtdlpArgs({ format, outTemplate, wantsVideo, target, useCookies, p
     if (playerClient) {
         args.push("--extractor-args", `youtube:player_client=${playerClient}`);
     }
-    args.push("--js-runtimes", "bun");
+    // Node.js is already the container's base runtime — bun was never
+    // installed in the Dockerfile, which silently broke YouTube's n-challenge
+    // solving (see: https://github.com/yt-dlp/yt-dlp/wiki/EJS). Point yt-dlp
+    // at node instead, and allow it to fetch the EJS solver script it needs.
+    args.push("--js-runtimes", "node");
+    args.push("--remote-components", "ejs:github");
     if (!wantsVideo) {
         args.push("--extract-audio", "--audio-format", "mp3", "--audio-quality", "0");
     }
