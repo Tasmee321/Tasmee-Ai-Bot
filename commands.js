@@ -355,11 +355,8 @@ function buildYtdlpArgs({ format, outTemplate, wantsVideo, target, useCookies, p
     if (playerClient) {
         args.push("--extractor-args", `youtube:player_client=${playerClient}`);
     }
-    // Node.js is already the container's base runtime — bun was never
-    // installed in the Dockerfile, which silently broke YouTube's n-challenge
-    // solving (see: https://github.com/yt-dlp/yt-dlp/wiki/EJS). Point yt-dlp
-    // at explicit node path instead, and allow it to fetch the EJS solver script it needs.
-    args.push("--js-runtimes", "/usr/local/bin/node");
+    // Switched to deno runtime for robust EJS n-challenge solving.
+    args.push("--js-runtimes", "deno");
     args.push("--remote-components", "ejs:github");
     if (!wantsVideo) {
         args.push("--extract-audio", "--audio-format", "mp3", "--audio-quality", "0");
@@ -3165,7 +3162,7 @@ const allCommands = [
                 const items = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)].slice(0, 4);
                 const decode = (s) => (s || "").replace(/<!\[CDATA\[/g, "").replace(/\]\]>/g, "").replace(/&amp;/g, "&").replace(/&#39;/g, "'").replace(/&quot;/g, '"');
                 const lines = items.map((m) => `🪙 ${decode(m[1].match(/<title>(.*?)<\/title>/)?.[1] || "")}`);
-                await sock.sendMessage(from, { text: `🪙 *Gold Rate Updates*\n\n${lines.join("\n\n") || "Nahi mila."}\n\n_(Ye news headlines hain — exact rate confirm kar lein.)_` }, { quoted: msg });
+                await sock.sendMessage(from, { text: `🪙 *Gold Rate Updates*\n\n${lines.join("\n\n") || "Nahi mili."}\n\n_(Ye news headlines hain — exact rate confirm kar lein.)_` }, { quoted: msg });
             } catch (err) {
                 await sock.sendMessage(from, { text: `❌ ${err.message}` }, { quoted: msg });
             }
