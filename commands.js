@@ -358,8 +358,8 @@ function buildYtdlpArgs({ format, outTemplate, wantsVideo, target, useCookies, p
     // Node.js is already the container's base runtime — bun was never
     // installed in the Dockerfile, which silently broke YouTube's n-challenge
     // solving (see: https://github.com/yt-dlp/yt-dlp/wiki/EJS). Point yt-dlp
-    // at node instead, and allow it to fetch the EJS solver script it needs.
-    args.push("--js-runtimes", "node");
+    // at explicit node path instead, and allow it to fetch the EJS solver script it needs.
+    args.push("--js-runtimes", "/usr/local/bin/node");
     args.push("--remote-components", "ejs:github");
     if (!wantsVideo) {
         args.push("--extract-audio", "--audio-format", "mp3", "--audio-quality", "0");
@@ -556,7 +556,7 @@ async function startYtFlow(sock, { from, msg, query, wantsVideo, config }) {
 
     let list = `🎵 *"${trimmed}"* ke top results:\n\n`;
     results.forEach((r, i) => {
-        list += `${i + 1}️⃣ ${r.title}${r.duration ? ` (${r.duration})` : ""}${r.uploader ? `\n   👤 ${r.uploader}` : ""}\n\n`;
+        list += `${i + 1}️⃣ ${r.title}${r.duration ? ` (${r.duration})` : ""}${r.uploader ? `\n    👤 ${r.uploader}` : ""}\n\n`;
     });
     list += `Reply karein *1-${results.length}* konsa chahiye.`;
 
@@ -950,8 +950,8 @@ const KNOWN_TOOL_NAMES = [
 
 // Some models occasionally print a fake/malformed function-call as plain
 // text instead of using the real tool_calls field, e.g.:
-//   </function>download_media>{"format": "audio", "query": "Pal pal"}<function>
-//   Text_to_voice: "Kya haal hai"
+//    </function>download_media>{"format": "audio", "query": "Pal pal"}<function>
+//    Text_to_voice: "Kya haal hai"
 // This tries to recognise that pattern and recover the intended tool call
 // instead of showing the garbled text straight to the user.
 function parseMalformedToolCall(text) {
@@ -1156,7 +1156,7 @@ const allCommands = [
             const categories = MENU_CATEGORIES;
 
             let menu = `◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤\n`;
-            menu += `　　⟦ SYSTEM ONLINE ⟧\n`;
+            menu += `    ⟦ SYSTEM ONLINE ⟧\n`;
             menu += `◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤\n\n`;
             menu += `🤖 *${config.BOT_NAME || "Tasmee-Ai-Bot"}*\n`;
             menu += `⚡ Advanced Neural Assistant — v2.0\n\n`;
@@ -1323,9 +1323,6 @@ const allCommands = [
             }
             await sock.sendMessage(from, { text: "🔄 Bot restart ho raha hai, thori dair mein wapis online aa jayega..." }, { quoted: msg });
             const { exec } = require("child_process");
-            // Prefer pm2 (production). If pm2 isn't managing this process (e.g.
-            // running with plain `node index.js` in dev), fall back to just
-            // exiting — nodemon/manual restart would be needed in that case.
             exec("pm2 restart Tasmee-Ai-Bot", (err) => {
                 if (err) {
                     console.log("⚠️ pm2 restart failed, exiting process instead:", err.message);
