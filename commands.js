@@ -60,6 +60,8 @@ async function extractPdfText(buffer) {
 }
 
 // Shared TTS engine — turns text into an .ogg/opus voice-note buffer.
+// Used by the .tts command AND by the automatic "reply to voice notes
+// with voice" feature in index.js, so both stay in sync.
 async function synthesizeSpeech(text) {
     const { spawn } = require("child_process");
     const os = require("os");
@@ -110,12 +112,15 @@ async function synthesizeSpeech(text) {
     return oggBuffer;
 }
 
-// Shared with index.js
+// Shared with index.js: hand out the owner's personal number when someone
+// urgently needs to talk to them directly, or asks for it by name.
 const OWNER_PERSONAL_NUMBER = "03423899407";
 const OWNER_PERSONAL_NAME = "Tasmee ul Hasnain";
 const URGENT_CONTACT_REGEX =
     /\b(urgent|emergency)\b|\btalk\s*to\s*(the\s*)?(owner|tasmee)\b|\bcontact\s*(the\s*)?(owner|tasmee)\b|\breal\s*person\b|tasmee\s*se\s*baat|zaroor[ia]\s*(baat|kaam)|lazmi\s*baat|owner\s*se\s*baat|tasmee\s*se\s*contact|(owner|tasmee)('?s)?\s*(ka|ki)?\s*(number|naam|name)|please.*\bnumber\b|\bnumber\b.*please/i;
 
+// Current date/time in Pakistan, used so the AI always knows "today" and
+// "abhi ka waqt" correctly instead of relying on stale training data.
 function getPakistanDateTimeString() {
     try {
         return new Date().toLocaleString("en-US", {
@@ -133,6 +138,8 @@ function getPakistanDateTimeString() {
     }
 }
 
+// Lightweight, no-API-key web search via DuckDuckGo's HTML results page.
+// Returns up to `maxResults` { title, snippet, url } objects, or [] on failure.
 async function webSearch(query, maxResults = 4) {
     try {
         const res = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
@@ -164,12 +171,18 @@ async function webSearch(query, maxResults = 4) {
     }
 }
 
+// Questions that likely need live/current info — triggers an automatic
+// web-search context injection for the AI, in addition to the always-on
+// current-date info.
 const REALTIME_INFO_REGEX =
     /\b(today|aaj|abhi|is\s*waqt|current|currently|latest|newest|update[ds]?|breaking|news|khabr|price|rate|score|match|result|kal|kaun\s*hai|who\s*is|when\s*is|kab\s*hai|is\s*saal|this\s*year)\b/i;
 
+// Builds the final system prompt: base persona + today's date, and (when the
+// question looks time-sensitive) a block of live web search results for the
+// model to answer from in its own words.
 async function buildSystemPrompt(basePersona, question) {
     let systemPrompt = `Aaj ki tareekh aur waqt: ${getPakistanDateTimeString()}.\n\n${basePersona || "You are a helpful assistant."}`;
-    
+
     // --- NEW ADDITION FOR SERVICES INTRODUCTION ---
     systemPrompt += `\n\nIMPORTANT RULE: If the user asks about what you can do, your services, your features, or who you are (e.g., "what can you do", "tum kya kar sakte ho", "apni services batao", "what are your features"), you MUST reply with a comprehensive but friendly introduction. Do NOT just tell them to type .menu. Your reply should be structured similarly to this:
 "Hello! I am **Tasmee AI Assistant**, your smart companion. I can speak and understand multiple languages! 🌍\n\nHere are some of the cool things I can do for you:\n\n📥 **Media Downloads:** I can download songs, videos, and reels from YouTube, TikTok, Instagram, Facebook, and Twitter.\n🎨 **AI & Media:** I can generate AI images, read text from pictures, convert your text into voice notes, and make stylish name graphics.\n🕌 **Islamic Features:** I provide Namaz timings, Qibla direction, daily Hadith, Quranic ayats, and have a built-in Tasbeeh counter.\n📚 **Education:** I can read and summarize PDF files, solve your homework step-by-step, and even search for free PDF books.\n🌦️ **Live Info:** Ask me for live weather, latest news headlines, cricket scores, or today's gold and petrol prices.\n\nYou can talk to me naturally, and I'll do my best to assist you! If you want to see a manual list of all my specific commands, just type *.menu* at any time."`;
@@ -187,6 +200,7 @@ async function buildSystemPrompt(basePersona, question) {
     return systemPrompt;
 }
 
+// WMO weather codes -> short Roman Urdu description, used by the .weather command.
 const WEATHER_CODES = {
     0: "Saaf aasman ☀️", 1: "Kaafi saaf 🌤️", 2: "Halki badal 🌥️", 3: "Badal chaya hua ☁️",
     45: "Dhund 🌫️", 48: "Barfeeli dhund 🌫️",
@@ -200,6 +214,8 @@ function describeWeatherCode(code) {
     return WEATHER_CODES[code] || "Mausam ka data mojood";
 }
 
+// Shared image generator (Pollinations AI — free, no API key). Used by both
+// the .image command and the natural "image bana do" -> "kaisi image?" flow.
 async function generateAndSendImage(sock, from, msg, prompt) {
     await sock.sendMessage(from, { text: "🎨 Image bana raha hoon, thoda wait karein..." }, { quoted: msg });
     try {
@@ -214,6 +230,7 @@ async function generateAndSendImage(sock, from, msg, prompt) {
     }
 }
 
+// Bing image search scrape (no API key). Returns an array of direct image URLs.
 async function bingImageSearch(query, max = 4) {
     try {
         const res = await fetch(`https://www.bing.com/images/search?q=${encodeURIComponent(query)}&form=HDRSC2`, {
@@ -233,6 +250,7 @@ async function bingImageSearch(query, max = 4) {
     }
 }
 
+// Pinterest search scrape (no API key). Returns an array of direct image URLs.
 async function pinterestImageSearch(query, max = 4) {
     try {
         const res = await fetch(`https://www.pinterest.com/search/pins/?q=${encodeURIComponent(query)}`, {
@@ -251,6 +269,9 @@ async function pinterestImageSearch(query, max = 4) {
     }
 }
 
+// Tries hard to find a REAL photo from the web before ever resorting to AI
+// generation: Bing first, then Pinterest, then again with a shorter/simpler
+// version of the query if the first pass found nothing.
 async function searchRealImages(query, max = 4) {
     let urls = await bingImageSearch(query, max);
     if (urls.length === 0) urls = await pinterestImageSearch(query, max);
@@ -265,6 +286,9 @@ async function searchRealImages(query, max = 4) {
     return urls;
 }
 
+// Main entry point for "I want an image": maximum effort to find and send a
+// REAL photo from the web first. Only if nothing real can be found after
+// trying multiple sources/queries does it fall back to AI generation.
 async function fetchOrGenerateImage(sock, from, msg, prompt) {
     await sock.sendMessage(from, { text: `🔎 "${prompt}" ki real photo dhoondh raha hoon...` }, { quoted: msg });
 
@@ -275,15 +299,16 @@ async function fetchOrGenerateImage(sock, from, msg, prompt) {
             const res = await fetch(url);
             if (!res.ok) continue;
             const buffer = Buffer.from(await res.arrayBuffer());
-            if (buffer.length < 3000) continue; 
+            if (buffer.length < 3000) continue; // skip tiny/broken placeholder responses
             await sock.sendMessage(from, { image: buffer, caption: `📷 *${prompt}*` }, { quoted: msg });
             sentAny = true;
         } catch {
-            // skip
+            // skip broken image, try the next one
         }
     }
     if (sentAny) return;
 
+    // Nothing real found after maximum effort — only now fall back to AI.
     await sock.sendMessage(from, { text: "📷 Koi real photo nahi mil saki, is liye AI se bana raha hoon..." }, { quoted: msg });
     await generateAndSendImage(sock, from, msg, prompt);
 }
@@ -314,6 +339,12 @@ function isOwner(msg, config) {
     return ownerNumbers.some((num) => num && (senderDigits === num || senderDigits.endsWith(num)));
 }
 
+// "Sign in to confirm you're not a bot" / cookie related YouTube errors —
+// these mean YouTube's anti-bot check rejected this attempt, not that the
+// video itself is unavailable. Worth retrying with a different player
+// client before giving up.
+const YT_BOT_CHECK_REGEX = /sign in to confirm|not a bot|cookies/i;
+
 // ----------------------------------------------------
 // THE ULTIMATE YT-DLP FIX: Completely Bypass Web Client
 // ----------------------------------------------------
@@ -325,12 +356,12 @@ function buildYtdlpArgs({ format, outTemplate, wantsVideo, target, useCookies, p
         "--geo-bypass",
         "--no-check-certificates",
     ];
-    
+
     if (useCookies) {
         args.push("--cookies", path.join(__dirname, "cookies.txt"));
     }
-    
-    // Yahan hum STRICTLY web aur mweb ko skip kar rahe hain. 
+
+    // Yahan hum STRICTLY web aur mweb ko skip kar rahe hain.
     // Official Music Videos par "n-challenge" sirf web client par aata hai.
     // Android/TV/iOS client direct link return karte hain.
     args.push("--extractor-args", `youtube:player_client=${playerClient || "android,tv"}`);
@@ -339,7 +370,7 @@ function buildYtdlpArgs({ format, outTemplate, wantsVideo, target, useCookies, p
     if (!wantsVideo) {
         args.push("--extract-audio", "--audio-format", "mp3", "--audio-quality", "0");
     }
-    
+
     args.push(target);
     return args;
 }
@@ -368,7 +399,7 @@ async function downloadYt(sock, { from, msg, target, label, wantsVideo, config }
 
     await sock.sendMessage(from, { text: `⏳ Downloading *${label}* as ${wantsVideo ? "video" : "audio"}, please wait...` });
 
-    // Hum 3 alag alag non-web clients try karenge. 
+    // Hum 3 alag alag non-web clients try karenge.
     // Is se 100% guarantee hai ke music videos bina kisi n-challenge error ke download honge.
     const attempts = [
         { useCookies: false, playerClient: "android" },
@@ -382,7 +413,7 @@ async function downloadYt(sock, { from, msg, target, label, wantsVideo, config }
         try {
             await runYtDlpOnce(args);
             lastErr = null; // Success!
-            break; 
+            break;
         } catch (err) {
             lastErr = err;
             console.log(`❌ YT attempt failed (${attempt.playerClient}):`, err.message);
@@ -423,6 +454,9 @@ async function downloadYt(sock, { from, msg, target, label, wantsVideo, config }
     }
 }
 
+// Runs a real YouTube search (via yt-dlp, no AI involved) and returns the
+// top 5 results as-is from YouTube — so the user can pick the exact song
+// they meant instead of the bot guessing the first (often wrong) result.
 function formatDuration(sec) {
     if (sec === undefined || sec === null) return "";
     sec = Math.round(sec);
@@ -481,6 +515,7 @@ async function startYtFlow(sock, { from, msg, query, wantsVideo, config }) {
 
     const directUrl = /youtube\.com|youtu\.be/i.test(trimmed) ? trimmed : null;
 
+    // Direct link given — no need to search, go straight to audio/video ask.
     if (directUrl) {
         const label = "this link";
         if (wantsVideo === true || wantsVideo === false) {
@@ -494,6 +529,7 @@ async function startYtFlow(sock, { from, msg, query, wantsVideo, config }) {
         return;
     }
 
+    // Text query — search YouTube and show top 5 real results to pick from.
     await sock.sendMessage(from, { text: `🔎 Searching *${trimmed}*...` }, { quoted: msg });
     let results;
     try {
@@ -510,7 +546,7 @@ async function startYtFlow(sock, { from, msg, query, wantsVideo, config }) {
 
     let list = `🎵 *"${trimmed}"* ke top results:\n\n`;
     results.forEach((r, i) => {
-        list += `${i + 1}️⃣ ${r.title}${r.duration ? ` (${r.duration})` : ""}${r.uploader ? `\n    👤 ${r.uploader}` : ""}\n\n`;
+        list += `${i + 1}️⃣ ${r.title}${r.duration ? ` (${r.duration})` : ""}${r.uploader ? `\n   👤 ${r.uploader}` : ""}\n\n`;
     });
     list += `Reply karein *1-${results.length}* konsa chahiye.`;
 
@@ -518,7 +554,17 @@ async function startYtFlow(sock, { from, msg, query, wantsVideo, config }) {
     await sock.sendMessage(from, { text: list }, { quoted: msg });
 }
 
-// AI tools setup
+// ============================================
+// AI tool-use: lets the .ai command / normal chat AI actually TRIGGER the
+// bot's own content commands (download, image, weather, news, pinterest,
+// tts, stylish text, web search) on the user's behalf, instead of just
+// talking about them. Uses Groq's OpenAI-compatible function-calling.
+//
+// Admin/config commands (ban, sudo, mode, prefix, botname, etc.) are
+// deliberately NOT exposed here and stay owner-only — letting the AI (or
+// any random user) trigger those would let strangers rename the bot,
+// change its settings, or ban other people.
+// ============================================
 const AI_TOOLS = [
     {
         type: "function",
@@ -762,6 +808,8 @@ const AI_TOOLS = [
     },
 ];
 
+// Runs the real command behind an AI tool call and returns a short status
+// string that gets fed back to the AI so it can give a natural closing reply.
 async function runAiTool(sock, { from, msg, config }, toolName, toolArgs) {
     const findCmd = (name) => allCommands.find((c) => c.name === name);
     try {
@@ -877,6 +925,11 @@ async function runAiTool(sock, { from, msg, config }, toolName, toolArgs) {
     }
 }
 
+// Sends one Groq chat-completions request with tool definitions attached,
+// executes any tools the model chooses to call (each tool sends its own
+// WhatsApp message directly), then asks the model for one short natural
+// closing reply. Returns that closing reply string, or a plain answer
+// string if no tool was called, or null on failure.
 const KNOWN_TOOL_NAMES = [
     "download_media", "find_or_generate_image", "text_to_voice", "stylish_text_image",
     "get_weather", "get_news", "pinterest_images", "web_search",
@@ -885,6 +938,12 @@ const KNOWN_TOOL_NAMES = [
     "set_azaan_reminder", "search_pdf_book", "solve_homework",
 ];
 
+// Some models occasionally print a fake/malformed function-call as plain
+// text instead of using the real tool_calls field, e.g.:
+//   </function>download_media>{"format": "audio", "query": "Pal pal"}<function>
+//   Text_to_voice: "Kya haal hai"
+// This tries to recognise that pattern and recover the intended tool call
+// instead of showing the garbled text straight to the user.
 function parseMalformedToolCall(text) {
     if (!text) return null;
     for (const toolName of KNOWN_TOOL_NAMES) {
@@ -896,10 +955,11 @@ function parseMalformedToolCall(text) {
                 return { name: toolName, args: JSON.parse(jsonMatch[1]) };
             } catch {}
         }
+        // Simpler form: `text_to_voice: "some text"` (no JSON object at all)
         const plainPattern = new RegExp(`${escaped}\\s*[:>]\\s*"([^"]+)"`, "i");
         const plainMatch = text.match(plainPattern);
         if (plainMatch) {
-            const key = toolName === "text_to_voice" ? "text" : "query";
+            const key = toolName === "text_to_voice" ? "text" : toolName === "download_media" ? "query" : "query";
             return { name: toolName, args: { [key]: plainMatch[1] } };
         }
     }
@@ -942,6 +1002,9 @@ async function chatWithTools(sock, { from, msg, config, systemPrompt, history, q
     return followData.choices?.[0]?.message?.content || "✅ Ho gaya!";
 }
 
+// Fetches an Internet Archive item's file list and finds the actual PDF
+// file inside it (archive.org "details" pages don't give a direct file —
+// you have to read the item's metadata to find the real filename first).
 async function fetchArchivePdf(identifier) {
     const res = await fetch(`https://archive.org/metadata/${encodeURIComponent(identifier)}`);
     const data = await res.json();
@@ -964,6 +1027,11 @@ async function fetchArchivePdf(identifier) {
     return { buffer: Buffer.from(arrayBuffer), fileName: pdfFile.name };
 }
 
+// Generic downloader for Instagram/Facebook/Twitter — cobalt.tools's free
+// public API was shut down, so this now reuses yt-dlp (already bundled &
+// working reliably for the .yt command) which natively supports these
+// platforms too. Downloads straight to a temp file and sends it as a
+// WhatsApp video message.
 async function genericVideoDownload(sock, { from, msg, url, label, emoji }) {
     const { spawn } = require("child_process");
     const os = require("os");
@@ -1003,6 +1071,8 @@ async function genericVideoDownload(sock, { from, msg, url, label, emoji }) {
     fs.unlink(filePath, () => {});
 }
 
+// Free, no-API-key translation fallback (MyMemory) — used only if Groq is
+// unavailable/exhausted. Good enough for short/medium text.
 const LANG_CODE_MAP = {
     english: "en", eng: "en", en: "en",
     urdu: "ur", ur: "ur",
@@ -1076,7 +1146,7 @@ const allCommands = [
             const categories = MENU_CATEGORIES;
 
             let menu = `◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤\n`;
-            menu += `    ⟦ SYSTEM ONLINE ⟧\n`;
+            menu += `　　⟦ SYSTEM ONLINE ⟧\n`;
             menu += `◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤\n\n`;
             menu += `🤖 *${config.BOT_NAME || "Tasmee-Ai-Bot"}*\n`;
             menu += `⚡ Advanced Neural Assistant — v2.0\n\n`;
@@ -1243,6 +1313,9 @@ const allCommands = [
             }
             await sock.sendMessage(from, { text: "🔄 Bot restart ho raha hai, thori dair mein wapis online aa jayega..." }, { quoted: msg });
             const { exec } = require("child_process");
+            // Prefer pm2 (production). If pm2 isn't managing this process (e.g.
+            // running with plain `node index.js` in dev), fall back to just
+            // exiting — nodemon/manual restart would be needed in that case.
             exec("pm2 restart Tasmee-Ai-Bot", (err) => {
                 if (err) {
                     console.log("⚠️ pm2 restart failed, exiting process instead:", err.message);
@@ -1587,7 +1660,7 @@ const allCommands = [
             for (const gid of groupIds) {
                 const ok = await sock.sendMessage(gid, { text: `📢 *Announcement*\n\n${message}` }).then(() => true).catch(() => false);
                 if (ok) sent++;
-                await new Promise((r) => setTimeout(r, 1500));
+                await new Promise((r) => setTimeout(r, 1500)); // small delay to avoid spam-flagging
             }
             await sock.sendMessage(from, { text: `✅ Broadcast bhej diya ${sent}/${groupIds.length} group(s) mein.` });
         },
@@ -1595,12 +1668,12 @@ const allCommands = [
     {
         name: "antibadword",
         aliases: ["antibad"],
-        description: "Toggle auto-deleting messages with bad words",
+        description: "Toggle auto-deleting messages with bad words (edit data/badwords.json to set the word list)",
         async execute(sock, { from, args, config, msg }) {
             if (!isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Owner only." });
             const choice = args[0]?.toLowerCase();
             if (choice !== "on" && choice !== "off") {
-                return sock.sendMessage(from, { text: `Current: *${config.ANTI_BAD_WORD === "true" ? "ON" : "OFF"}*\n\nUsage: .antibadword on/off` });
+                return sock.sendMessage(from, { text: `Current: *${config.ANTI_BAD_WORD === "true" ? "ON" : "OFF"}*\n\nUsage: .antibadword on/off\nWord list: data/badwords.json (empty by default — add words there).` });
             }
             updateConfig(config, "ANTI_BAD_WORD", choice === "on" ? "true" : "false");
             await sock.sendMessage(from, { text: `✅ Anti bad-word is now *${choice.toUpperCase()}*.` });
@@ -1741,21 +1814,27 @@ const allCommands = [
     {
         name: "ai",
         aliases: ["gemini", "gpt", "ask"],
-        description: "Ask the AI a question.",
+        description: "Ask the AI a question. Usage: .ai <your question>",
         async execute(sock, { from, args, config, msg }) {
             const question = args.join(" ");
             if (!question) {
-                await sock.sendMessage(from, { text: `❓ Please ask something.` });
+                await sock.sendMessage(from, {
+                    text: `❓ Please ask something. Example: *${config.PREFIX || "."}ai What is the capital of Pakistan?*`,
+                });
                 return;
             }
 
+            // Urgent-contact shortcut: skip the AI call and hand out the
+            // owner's personal number right away if clearly asked/urgent.
             if (URGENT_CONTACT_REGEX.test(question)) {
-                await sock.sendMessage(from, { text: `📞 Ji zaroor:\n*${OWNER_PERSONAL_NAME}*\n${OWNER_PERSONAL_NUMBER}` });
+                await sock.sendMessage(from, {
+                    text: `📞 Ji zaroor, aap seedha baat kar sakte hain:\n*${OWNER_PERSONAL_NAME}*\n${OWNER_PERSONAL_NUMBER} (wa.me/923423899407)`,
+                });
                 return;
             }
 
             if (groq.getKeys().length === 0) {
-                await sock.sendMessage(from, { text: "⚠️ API key not set." });
+                await sock.sendMessage(from, { text: "⚠️ API key not set in config." });
                 return;
             }
 
@@ -1764,7 +1843,7 @@ const allCommands = [
             try {
                 const { name, history } = memory.getContext(from);
                 let systemPrompt = await buildSystemPrompt(config.AI_PERSONA, question);
-                if (name) systemPrompt += `\n\nThe user's name is "${name}".`;
+                if (name) systemPrompt += `\n\nThe user's name in this chat is "${name}" — you were told this earlier, use it naturally when it fits.`;
 
                 const answer = await chatWithTools(sock, { from, msg, config, systemPrompt, history, question });
                 if (!answer) throw new Error("Sorry, I couldn't generate a response.");
@@ -1779,7 +1858,7 @@ const allCommands = [
     {
         name: "yt",
         aliases: ["youtube", "ytmp3", "ytmp4"],
-        description: "Download YouTube media",
+        description: "Download YouTube audio/video",
         async execute(sock, { from, args, text, msg, config }) {
             const explicitVideo = /\bvideo\b/i.test(text) || text.includes("ytmp4");
             const explicitAudio = /\baudio\b/i.test(text) || text.includes("ytmp3");
@@ -1787,41 +1866,61 @@ const allCommands = [
             const query = cleanArgs.join(" ");
 
             if (!query) {
-                await sock.sendMessage(from, { text: "❌ Please provide a YouTube link or name." });
+                await sock.sendMessage(from, {
+                    text: "❌ Please provide a YouTube link or a song/video name.\nExample: *.yt Attention Charlie Puth*",
+                });
                 return;
             }
-            await startYtFlow(sock, { from, msg, query, wantsVideo: explicitVideo ? true : explicitAudio ? false : null, config });
+
+            await startYtFlow(sock, {
+                from,
+                msg,
+                query,
+                wantsVideo: explicitVideo ? true : explicitAudio ? false : null,
+                config,
+            });
         },
     },
     {
         name: "audio",
         aliases: ["song", "gana"],
-        description: "Download audio",
+        description: "Gana/audio download karein (search se number chun kar). Usage: .audio <song name>",
         async execute(sock, { from, args, msg, config }) {
             const query = args.join(" ").trim();
-            if (!query) return sock.sendMessage(from, { text: "❌ Please provide a name/link." }, { quoted: msg });
+            if (!query) {
+                await sock.sendMessage(from, { text: "❌ Gana ka naam ya YouTube link dein.\nExample: *.audio Attention Charlie Puth*" }, { quoted: msg });
+                return;
+            }
             await startYtFlow(sock, { from, msg, query, wantsVideo: false, config });
         },
     },
     {
         name: "video",
         aliases: ["vid"],
-        description: "Download video",
+        description: "Video download karein (search se number chun kar). Usage: .video <name/link>",
         async execute(sock, { from, args, msg, config }) {
             const query = args.join(" ").trim();
-            if (!query) return sock.sendMessage(from, { text: "❌ Please provide a name/link." }, { quoted: msg });
+            if (!query) {
+                await sock.sendMessage(from, { text: "❌ Video ka naam ya YouTube link dein.\nExample: *.video Attention Charlie Puth*" }, { quoted: msg });
+                return;
+            }
             await startYtFlow(sock, { from, msg, query, wantsVideo: true, config });
         },
     },
     {
         name: "welcome",
         aliases: [],
-        description: "Toggle welcome messages",
+        description: "Turn welcome/goodbye messages on or off",
         async execute(sock, { from, args, config }) {
             const choice = args[0]?.toLowerCase();
-            if (choice !== "on" && choice !== "off") return sock.sendMessage(from, { text: "Usage: .welcome on/off" });
+            if (choice !== "on" && choice !== "off") {
+                await sock.sendMessage(from, {
+                    text: `Current status: *${config.WELCOME === "true" || config.WELCOME === true ? "ON" : "OFF"}*\n\nUsage: *.welcome on* or *.welcome off*`,
+                });
+                return;
+            }
             updateConfig(config, "WELCOME", choice === "on" ? "true" : "false");
-            await sock.sendMessage(from, { text: `✅ Welcome is now *${choice.toUpperCase()}*.` });
+            await sock.sendMessage(from, { text: `✅ Welcome/goodbye messages are now *${choice.toUpperCase()}*.` });
         },
     },
     {
@@ -1831,7 +1930,12 @@ const allCommands = [
         async execute(sock, { from, msg }) {
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
             const targetMsg = quoted ? { message: quoted, key: msg.key } : msg;
-            if (!targetMsg.message?.imageMessage) return sock.sendMessage(from, { text: "❌ Send/reply to an image." });
+            const hasImage = targetMsg.message?.imageMessage;
+
+            if (!hasImage) {
+                await sock.sendMessage(from, { text: "❌ Please send or reply to an image with *.sticker*." });
+                return;
+            }
 
             try {
                 const buffer = await downloadMediaMessage(targetMsg, "buffer", {});
@@ -1841,25 +1945,32 @@ const allCommands = [
                     .toBuffer();
                 await sock.sendMessage(from, { sticker: webpBuffer });
             } catch (err) {
-                await sock.sendMessage(from, { text: `❌ Failed: ${err.message}` });
+                await sock.sendMessage(from, { text: `❌ Sticker conversion failed: ${err.message}` });
             }
         },
     },
     {
         name: "analyze",
         aliases: ["describe", "imgai", "vision"],
-        description: "AI image analysis",
+        description: "Photo bhejein ya kisi photo pe reply karein, AI usay describe/explain karega. Usage: .analyze [sawal]",
         async execute(sock, { from, args, msg }) {
             const targetMsg = getTargetImageMessage(msg);
-            if (!targetMsg) return sock.sendMessage(from, { text: "❌ Reply to a photo." }, { quoted: msg });
+            if (!targetMsg) {
+                await sock.sendMessage(from, { text: "❌ Photo bhejein ya kisi photo pe reply karke *.analyze* likhein." }, { quoted: msg });
+                return;
+            }
             if (groq.getKeys().length === 0) return sock.sendMessage(from, { text: "⚠️ API key not set." });
             const question = args.join(" ").trim();
-            const prompt = question ? `Is image ke bare mein jawab dein: ${question}` : "Tafseel bataein.";
+            const prompt = question
+                ? `Is image ke bare mein Roman Urdu/English mix mein jawab dein: ${question}`
+                : "Is image mein kya hai, tafseel se Roman Urdu mein bataein — jo bhi dikh raha hai (objects, log, text, context) sab cover karein.";
             try {
-                await sock.sendMessage(from, { text: "🔎 Analyzing..." }, { quoted: msg });
+                await sock.sendMessage(from, { text: "🔎 Image analyze kar raha hoon..." }, { quoted: msg });
                 const buffer = await downloadMediaMessage(targetMsg, "buffer", {});
-                const data = await groq.groqVisionChat(buffer.toString("base64"), prompt);
-                await sock.sendMessage(from, { text: data.choices?.[0]?.message?.content || "❌ Failed." }, { quoted: msg });
+                const base64 = buffer.toString("base64");
+                const data = await groq.groqVisionChat(base64, prompt);
+                const reply = data.choices?.[0]?.message?.content;
+                await sock.sendMessage(from, { text: reply || "❌ Image analyze nahi ho saki." }, { quoted: msg });
             } catch (err) {
                 await sock.sendMessage(from, { text: `❌ ${err.message}` }, { quoted: msg });
             }
@@ -1868,16 +1979,24 @@ const allCommands = [
     {
         name: "ocr",
         aliases: ["imgtotext", "readimg"],
-        description: "Extract text from image",
+        description: "Photo mein likha hua text nikalein. Usage: .ocr (photo pe reply ya sath bhejein)",
         async execute(sock, { from, msg }) {
             const targetMsg = getTargetImageMessage(msg);
-            if (!targetMsg) return sock.sendMessage(from, { text: "❌ Reply to a photo." }, { quoted: msg });
+            if (!targetMsg) {
+                await sock.sendMessage(from, { text: "❌ Photo bhejein ya kisi photo pe reply karke *.ocr* likhein." }, { quoted: msg });
+                return;
+            }
             if (groq.getKeys().length === 0) return sock.sendMessage(from, { text: "⚠️ API key not set." });
             try {
-                await sock.sendMessage(from, { text: "🔎 Extracting..." }, { quoted: msg });
+                await sock.sendMessage(from, { text: "🔎 Text nikal raha hoon..." }, { quoted: msg });
                 const buffer = await downloadMediaMessage(targetMsg, "buffer", {});
-                const data = await groq.groqVisionChat(buffer.toString("base64"), "Extract ALL text accurately. Reply with text only.");
-                await sock.sendMessage(from, { text: `📝 *Text:*\n\n${data.choices?.[0]?.message?.content || "None"}` }, { quoted: msg });
+                const base64 = buffer.toString("base64");
+                const data = await groq.groqVisionChat(
+                    base64,
+                    "Extract ALL text visible in this image exactly as written, preserving line breaks. Reply with ONLY the extracted text, nothing else. If there is no text, say 'Koi text nahi mila.'"
+                );
+                const reply = data.choices?.[0]?.message?.content;
+                await sock.sendMessage(from, { text: `📝 *Extracted Text:*\n\n${reply || "Koi text nahi mila."}` }, { quoted: msg });
             } catch (err) {
                 await sock.sendMessage(from, { text: `❌ ${err.message}` }, { quoted: msg });
             }
@@ -1886,158 +2005,282 @@ const allCommands = [
     {
         name: "imgurl",
         aliases: ["img2url", "imagelink"],
-        description: "Upload photo to catbox.moe",
+        description: "Photo ko upload karke seedha shareable link dein. Usage: .imgurl (photo pe reply ya sath bhejein)",
         async execute(sock, { from, msg }) {
             const targetMsg = getTargetImageMessage(msg);
-            if (!targetMsg) return sock.sendMessage(from, { text: "❌ Reply to a photo." }, { quoted: msg });
+            if (!targetMsg) {
+                await sock.sendMessage(from, { text: "❌ Photo bhejein ya kisi photo pe reply karke *.imgurl* likhein." }, { quoted: msg });
+                return;
+            }
             try {
-                await sock.sendMessage(from, { text: "⏳ Uploading..." }, { quoted: msg });
+                await sock.sendMessage(from, { text: "⏳ Upload ho raha hai..." }, { quoted: msg });
                 const buffer = await downloadMediaMessage(targetMsg, "buffer", {});
                 const form = new FormData();
                 form.append("reqtype", "fileupload");
                 form.append("fileToUpload", new Blob([buffer]), "image.jpg");
                 const res = await fetch("https://catbox.moe/user/api.php", { method: "POST", body: form });
                 const link = (await res.text()).trim();
+                if (!link.startsWith("http")) throw new Error("Upload service se link nahi mila.");
                 await sock.sendMessage(from, { text: `🔗 *Link:* ${link}` }, { quoted: msg });
             } catch (err) {
-                await sock.sendMessage(from, { text: `❌ Failed: ${err.message}` }, { quoted: msg });
+                await sock.sendMessage(from, { text: `❌ Upload nahi ho saka: ${err.message}` }, { quoted: msg });
             }
         },
     },
     {
         name: "text",
         aliases: ["stylish", "name"],
-        description: "Stylish name graphic",
+        description: "Turn a name/word into a stylish image. Usage: .text <name>",
         async execute(sock, { from, args, msg }) {
             const raw = args.join(" ").trim();
-            if (!raw || raw.length > 24) return sock.sendMessage(from, { text: "❌ Name must be 1-24 chars." });
-            
-            const safeText = raw.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-            const width = 900; const height = 500;
-            let fontSize = raw.length > 18 ? 55 : raw.length > 12 ? 70 : raw.length > 8 ? 90 : 110;
-            
-            let seed = 0; for (const ch of raw) seed += ch.charCodeAt(0);
-            const palettes = [["#ff6a00", "#ee0979"], ["#00c6ff", "#0072ff"], ["#f7971e", "#ffd200"], ["#8e2de2", "#4a00e0"]];
+            if (!raw) {
+                await sock.sendMessage(from, { text: "❓ Please provide a name/word. Example: *.text Shahzad*" });
+                return;
+            }
+            if (raw.length > 24) {
+                await sock.sendMessage(from, { text: "❌ Please keep it under 24 characters for a clean-looking image." });
+                return;
+            }
+
+            // Escape XML special chars so the name can't break the SVG.
+            const safeText = raw
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;");
+
+            // Pick a font size that shrinks for longer names so it still fits.
+            const width = 900;
+            const height = 500;
+            let fontSize = 110;
+            if (raw.length > 8) fontSize = 90;
+            if (raw.length > 12) fontSize = 70;
+            if (raw.length > 18) fontSize = 55;
+
+            // Random-ish but deterministic-per-word gradient pick, so the
+            // same name always looks the same but different names differ.
+            const palettes = [
+                ["#ff6a00", "#ee0979"],
+                ["#00c6ff", "#0072ff"],
+                ["#f7971e", "#ffd200"],
+                ["#8e2de2", "#4a00e0"],
+                ["#11998e", "#38ef7d"],
+                ["#fc466b", "#3f5efb"],
+            ];
+            let seed = 0;
+            for (const ch of raw) seed += ch.charCodeAt(0);
             const [colorA, colorB] = palettes[seed % palettes.length];
 
             const svg = `
 <svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#0f0c29"/><stop offset="100%" stop-color="#24243e"/></linearGradient>
-    <linearGradient id="txt" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="${colorA}"/><stop offset="100%" stop-color="${colorB}"/></linearGradient>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f0c29"/>
+      <stop offset="50%" stop-color="#302b63"/>
+      <stop offset="100%" stop-color="#24243e"/>
+    </linearGradient>
+    <linearGradient id="textGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="${colorA}"/>
+      <stop offset="100%" stop-color="${colorB}"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="10" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
   </defs>
-  <rect width="${width}" height="${height}" fill="url(#bg)"/>
-  <text x="50%" y="50%" font-family="Georgia" font-weight="bold" font-size="${fontSize}" fill="url(#txt)" text-anchor="middle" dominant-baseline="middle">${safeText}</text>
+  <rect width="${width}" height="${height}" fill="url(#bgGrad)"/>
+  <rect x="20" y="20" width="${width - 40}" height="${height - 40}" fill="none" stroke="url(#textGrad)" stroke-width="4" rx="24"/>
+  <text x="50%" y="52%" font-family="Georgia, 'DejaVu Serif', serif" font-weight="bold" font-size="${fontSize}"
+        fill="url(#textGrad)" stroke="#ffffff" stroke-width="1.5" text-anchor="middle" dominant-baseline="middle"
+        filter="url(#glow)">${safeText}</text>
+  <text x="50%" y="90%" font-family="Arial, sans-serif" font-size="18" fill="#ffffffaa" text-anchor="middle">Tasmee-Ai-Bot</text>
 </svg>`.trim();
+
             try {
                 const pngBuffer = await sharp(Buffer.from(svg)).png().toBuffer();
                 await sock.sendMessage(from, { image: pngBuffer, caption: `✨ *${raw}*` }, { quoted: msg });
             } catch (err) {
-                await sock.sendMessage(from, { text: `❌ Failed: ${err.message}` });
+                await sock.sendMessage(from, { text: `❌ Couldn't generate the image: ${err.message}` });
             }
         },
     },
     {
         name: "image",
         aliases: ["img", "imagine", "generate", "photo"],
-        description: "Image finder / generator",
+        description: "Real photo dhoondein (na mile to AI image banayein). Usage: .image <cheez ka naam>",
         async execute(sock, { from, args, msg }) {
             const prompt = args.join(" ").trim();
-            if (!prompt) return sock.sendMessage(from, { text: "🖼️ Provide a prompt." }, { quoted: msg });
+            if (!prompt) {
+                module.exports.pendingImage.set(from, Date.now());
+                setTimeout(() => {
+                    const ts = module.exports.pendingImage.get(from);
+                    if (ts && Date.now() - ts >= 120000) module.exports.pendingImage.delete(from);
+                }, 120000);
+                await sock.sendMessage(from, {
+                    text: "🖼️ Zaroor! Kis cheez ki image chahiye? Naam bata dein.",
+                }, { quoted: msg });
+                return;
+            }
             await fetchOrGenerateImage(sock, from, msg, prompt);
         },
     },
     {
         name: "weather",
         aliases: ["mausam", "temperature"],
-        description: "Weather check",
+        description: "Kisi bhi shehar ka live mausam. Usage: .weather <city>",
         async execute(sock, { from, args, msg }) {
             const city = args.join(" ").trim() || "Faisalabad";
             try {
                 const geoRes = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=en&format=json`);
                 const geoData = await geoRes.json();
                 const place = geoData.results?.[0];
-                if (!place) return sock.sendMessage(from, { text: `❌ City not found.` }, { quoted: msg });
-
-                const wRes = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${place.latitude}&longitude=${place.longitude}&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m&timezone=auto`);
-                const c = (await wRes.json()).current;
-                
+                if (!place) {
+                    await sock.sendMessage(from, { text: `❌ "${city}" nahi mila. Sahi shehar ka naam try karein.` }, { quoted: msg });
+                    return;
+                }
+                const wRes = await fetch(
+                    `https://api.open-meteo.com/v1/forecast?latitude=${place.latitude}&longitude=${place.longitude}&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m&timezone=auto`
+                );
+                const wData = await wRes.json();
+                const c = wData.current;
+                if (!c) throw new Error("Weather data mojood nahi.");
                 const desc = describeWeatherCode(c.weather_code);
-                const text = `📍 *${place.name}*\n\n${desc}\n🌡️ Temp: ${c.temperature_2m}°C\n💧 Humidity: ${c.relative_humidity_2m}%\n💨 Wind: ${c.wind_speed_10m} km/h`;
+                const location = `${place.name}${place.admin1 ? ", " + place.admin1 : ""}, ${place.country}`;
+                const text =
+                    `📍 *${location}*\n\n${desc}\n` +
+                    `🌡️ Temperature: ${c.temperature_2m}°C (feels like ${c.apparent_temperature}°C)\n` +
+                    `💧 Humidity: ${c.relative_humidity_2m}%\n` +
+                    `💨 Hawa: ${c.wind_speed_10m} km/h\n\n` +
+                    `🕒 ${getPakistanDateTimeString()}`;
                 await sock.sendMessage(from, { text }, { quoted: msg });
             } catch (err) {
-                await sock.sendMessage(from, { text: `❌ Failed: ${err.message}` }, { quoted: msg });
+                await sock.sendMessage(from, { text: `❌ Mausam ka data nahi mil saka: ${err.message}` }, { quoted: msg });
             }
         },
     },
     {
         name: "news",
         aliases: ["khabrain", "khabar"],
-        description: "News headlines",
+        description: "Latest news headlines. Usage: .news [topic]",
         async execute(sock, { from, args, msg }) {
             const topic = args.join(" ").trim();
-            const rssUrl = topic ? `https://news.google.com/rss/search?q=${encodeURIComponent(topic)}&hl=en-PK&gl=PK&ceid=PK:en` : `https://news.google.com/rss?hl=en-PK&gl=PK&ceid=PK:en`;
+            const rssUrl = topic
+                ? `https://news.google.com/rss/search?q=${encodeURIComponent(topic)}&hl=en-PK&gl=PK&ceid=PK:en`
+                : `https://news.google.com/rss?hl=en-PK&gl=PK&ceid=PK:en`;
             try {
                 const res = await fetch(rssUrl);
                 const xml = await res.text();
-                const items = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)].slice(0, 5);
-                const lines = items.map((m, i) => `${i + 1}. *${m[1].match(/<title>(.*?)<\/title>/)?.[1]}*`);
-                await sock.sendMessage(from, { text: `📰 *News*\n\n${lines.join("\n\n")}` }, { quoted: msg });
+                const items = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)].slice(0, 6);
+                if (items.length === 0) {
+                    await sock.sendMessage(from, { text: "❌ Abhi news nahi mil saki, thori dair baad try karein." }, { quoted: msg });
+                    return;
+                }
+                const decode = (s) =>
+                    (s || "")
+                        .replace(/&#39;/g, "'")
+                        .replace(/&quot;/g, '"')
+                        .replace(/&amp;/g, "&")
+                        .replace(/&lt;/g, "<")
+                        .replace(/&gt;/g, ">")
+                        .trim();
+                const lines = items.map((m, i) => {
+                    const block = m[1];
+                    const titleMatch = block.match(/<title>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?<\/title>/);
+                    const linkMatch = block.match(/<link>(.*?)<\/link>/);
+                    const title = decode(titleMatch?.[1]);
+                    const link = linkMatch?.[1] || "";
+                    return `${i + 1}. *${title}*\n${link}`;
+                });
+                const header = topic ? `📰 *News: ${topic}*` : `📰 *Aaj ki Top Headlines*`;
+                await sock.sendMessage(from, { text: `${header}\n\n${lines.join("\n\n")}` }, { quoted: msg });
             } catch (err) {
-                await sock.sendMessage(from, { text: `❌ Failed: ${err.message}` }, { quoted: msg });
+                await sock.sendMessage(from, { text: `❌ News fetch nahi ho saki: ${err.message}` }, { quoted: msg });
             }
         },
     },
     {
         name: "pinterest",
         aliases: ["pin", "pins"],
-        description: "Pinterest search",
+        description: "Pinterest se pictures download karein. Usage: .pinterest <query>",
         async execute(sock, { from, args, msg }) {
             const query = args.join(" ").trim();
-            if (!query) return sock.sendMessage(from, { text: "❓ What to search?" }, { quoted: msg });
-            await sock.sendMessage(from, { text: `📌 Searching...` }, { quoted: msg });
+            if (!query) {
+                await sock.sendMessage(from, { text: "❓ Kis cheez ki image chahiye? Example: *.pinterest sunset wallpaper*" }, { quoted: msg });
+                return;
+            }
+            await sock.sendMessage(from, { text: `📌 "${query}" search kar raha hoon...` }, { quoted: msg });
             try {
                 const unique = await pinterestImageSearch(query, 4);
-                if (unique.length === 0) return sock.sendMessage(from, { text: "❌ Not found." }, { quoted: msg });
+
+                if (unique.length === 0) {
+                    await sock.sendMessage(from, { text: "❌ Koi image nahi mili, dusra keyword try karein." }, { quoted: msg });
+                    return;
+                }
+
+                let sent = 0;
                 for (const imgUrl of unique) {
                     try {
                         const imgRes = await fetch(imgUrl);
                         if (!imgRes.ok) continue;
-                        await sock.sendMessage(from, { image: Buffer.from(await imgRes.arrayBuffer()), caption: query });
-                    } catch {}
+                        const buffer = Buffer.from(await imgRes.arrayBuffer());
+                        await sock.sendMessage(from, { image: buffer, caption: `📌 ${query}` });
+                        sent++;
+                    } catch {
+                        // skip broken image, try the next one
+                    }
+                }
+                if (sent === 0) {
+                    await sock.sendMessage(from, { text: "❌ Images mil to gayin lekin download nahi ho sakin, dobara try karein." }, { quoted: msg });
                 }
             } catch (err) {
-                await sock.sendMessage(from, { text: `❌ Failed: ${err.message}` }, { quoted: msg });
+                await sock.sendMessage(from, { text: `❌ Pinterest se images nahi mil sakin: ${err.message}` }, { quoted: msg });
             }
         },
     },
     {
         name: "search",
         aliases: ["google", "websearch"],
-        description: "Web search",
+        description: "Live web se jawab dhoondein. Usage: .search <sawaal>",
         async execute(sock, { from, args, config, msg }) {
             const query = args.join(" ").trim();
-            if (!query) return sock.sendMessage(from, { text: "❓ What to search?" }, { quoted: msg });
-            await sock.sendMessage(from, { text: "🔎 Searching..." }, { quoted: msg });
-            
+            if (!query) {
+                await sock.sendMessage(from, { text: "❓ Kya search karna hai? Example: *.search aaj USD to PKR rate*" }, { quoted: msg });
+                return;
+            }
+
+            await sock.sendMessage(from, { text: "🔎 Web par search kar raha hoon..." }, { quoted: msg });
             const results = await webSearch(query, 5);
-            if (results.length === 0) return sock.sendMessage(from, { text: "❌ Not found." }, { quoted: msg });
+            if (results.length === 0) {
+                await sock.sendMessage(from, { text: "❌ Web search se kuch nahi mila, dobara try karein." }, { quoted: msg });
+                return;
+            }
 
             if (groq.getKeys().length === 0) {
                 const list = results.map((r, i) => `${i + 1}. *${r.title}*\n${r.snippet}\n${r.url}`).join("\n\n");
-                return sock.sendMessage(from, { text: `🔎 *Results:*\n\n${list}` }, { quoted: msg });
+                await sock.sendMessage(from, { text: `🔎 *Results:*\n\n${list}` }, { quoted: msg });
+                return;
             }
 
             try {
                 const context = results.map((r, i) => `[${i + 1}] ${r.title} — ${r.snippet} (${r.url})`).join("\n");
+                const systemPrompt =
+                    `Aaj ki tareekh: ${getPakistanDateTimeString()}. Neeche live web search results diye gaye hain — inhe apne alfaz mein use karke, Roman Urdu mein, seedha aur mukhtasar jawab dein. Aakhir mein 1-2 source links bhi de dein.\n\n${context}`;
                 const data = await groq.groqChatWithFallback({
                     model: "llama-3.3-70b-versatile",
                     messages: [
-                        { role: "system", content: `You are a helpful assistant answering from provided context in Roman Urdu.` },
-                        { role: "user", content: `Context:\n${context}\n\nQuery: ${query}` },
+                        { role: "system", content: systemPrompt },
+                        { role: "user", content: query },
                     ],
                 });
-                await sock.sendMessage(from, { text: `🔎 ${data.choices?.[0]?.message?.content}` }, { quoted: msg });
+                const answer = data.choices?.[0]?.message?.content;
+                if (answer) {
+                    await sock.sendMessage(from, { text: `🔎 ${answer}` }, { quoted: msg });
+                } else {
+                    throw new Error("AI se jawab nahi mila");
+                }
             } catch (err) {
                 const list = results.map((r, i) => `${i + 1}. *${r.title}*\n${r.snippet}\n${r.url}`).join("\n\n");
                 await sock.sendMessage(from, { text: `🔎 *Results:*\n\n${list}` }, { quoted: msg });
@@ -2047,11 +2290,880 @@ const allCommands = [
     {
         name: "developer",
         aliases: ["dev", "bug", "report", "support"],
-        description: "Developer contact",
+        description: "Bug report ya madad ke liye developer se contact karein",
         async execute(sock, { from, msg }) {
-            await sock.sendMessage(from, { text: `👨‍💻 *Tasmee ul Hasnain*\n📞 wa.me/923423899407` }, { quoted: msg });
+            await sock.sendMessage(from, {
+                text:
+                    `🛠️ Koi bug mila ya koi command kaam nahi kar raha?\n` +
+                    `Developer ko seedha message karein:\n` +
+                    `👨‍💻 *Tasmee ul Hasnain*\n` +
+                    `📞 wa.me/923423899407`,
+            }, { quoted: msg });
         },
-    }
+    },
+
+    // ============================================
+    // Islamic / prayer utilities
+    // ============================================
+    {
+        name: "prayertimes",
+        aliases: ["namaz", "salah"],
+        description: "Namaz ke aaj ke timings. Usage: .namaz <city>",
+        async execute(sock, { from, args, msg }) {
+            const city = args.join(" ").trim() || "Faisalabad";
+            try {
+                const res = await fetch(`https://api.aladhan.com/v1/timingsByCity?city=${encodeURIComponent(city)}&country=Pakistan&method=1`);
+                const data = await res.json();
+                const t = data?.data?.timings;
+                if (!t) throw new Error("Timings nahi mile.");
+                const text =
+                    `🕌 *Namaz Timings — ${city}*\n\n` +
+                    `🌅 Fajr: ${t.Fajr}\n` +
+                    `☀️ Zuhr: ${t.Dhuhr}\n` +
+                    `🌤️ Asr: ${t.Asr}\n` +
+                    `🌇 Maghrib: ${t.Maghrib}\n` +
+                    `🌙 Isha: ${t.Isha}\n\n` +
+                    `📅 ${data.data.date?.readable || ""}`;
+                await sock.sendMessage(from, { text }, { quoted: msg });
+            } catch (err) {
+                await sock.sendMessage(from, { text: `❌ Namaz timings nahi mil sake: ${err.message}` }, { quoted: msg });
+            }
+        },
+    },
+    {
+        name: "qibla",
+        aliases: [],
+        description: "Qibla ki direction. Usage: .qibla <city>",
+        async execute(sock, { from, args, msg }) {
+            const city = args.join(" ").trim() || "Faisalabad";
+            try {
+                const geoRes = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=en&format=json`);
+                const geoData = await geoRes.json();
+                const place = geoData.results?.[0];
+                if (!place) throw new Error(`"${city}" nahi mila.`);
+                const qRes = await fetch(`https://api.aladhan.com/v1/qibla/${place.latitude}/${place.longitude}`);
+                const qData = await qRes.json();
+                const direction = qData?.data?.direction;
+                if (direction === undefined) throw new Error("Qibla direction nahi mili.");
+                await sock.sendMessage(from, {
+                    text: `🕋 *Qibla Direction — ${place.name}*\n\n📐 ${direction.toFixed(1)}° (North se, clockwise)\n\nCompass app mein ye angle set karein.`,
+                }, { quoted: msg });
+            } catch (err) {
+                await sock.sendMessage(from, { text: `❌ ${err.message}` }, { quoted: msg });
+            }
+        },
+    },
+    {
+        name: "hijri",
+        aliases: ["islamicdate"],
+        description: "Aaj ki Hijri/Islamic tareekh",
+        async execute(sock, { from, msg }) {
+            try {
+                const now = new Date();
+                const dd = String(now.getDate()).padStart(2, "0");
+                const mm = String(now.getMonth() + 1).padStart(2, "0");
+                const yyyy = now.getFullYear();
+                const res = await fetch(`https://api.aladhan.com/v1/gToH?date=${dd}-${mm}-${yyyy}`);
+                const data = await res.json();
+                const h = data?.data?.hijri;
+                if (!h) throw new Error("Hijri date nahi mili.");
+                await sock.sendMessage(from, {
+                    text: `📅 *Aaj ki Islamic Tareekh*\n\n${h.day} ${h.month?.en} ${h.year} AH\n(${h.weekday?.en})`,
+                }, { quoted: msg });
+            } catch (err) {
+                await sock.sendMessage(from, { text: `❌ ${err.message}` }, { quoted: msg });
+            }
+        },
+    },
+
+    {
+        name: "quran",
+        aliases: ["surah"],
+        description: "Surah/ayat parhein Urdu tarjuma ke sath. Usage: .quran <surah number ya naam> [ayat number]",
+        async execute(sock, { from, args, msg }) {
+            const raw = args.join(" ").trim();
+            if (!raw) {
+                await sock.sendMessage(from, { text: "❓ Surah number ya naam dein.\nExample: *.quran 1* (Al-Fatiha) ya *.quran 2 255* (Ayat-ul-Kursi)" }, { quoted: msg });
+                return;
+            }
+            const parts = raw.split(/\s+/);
+            const surahNum = parts[0];
+            const ayatNum = parts[1];
+            try {
+                if (ayatNum) {
+                    const res = await fetch(`https://api.alquran.cloud/v1/ayah/${surahNum}:${ayatNum}/editions/quran-uthmani,ur.jalandhry`);
+                    const data = await res.json();
+                    const arabic = data?.data?.[0]?.text;
+                    const urdu = data?.data?.[1]?.text;
+                    const surahName = data?.data?.[0]?.surah?.englishName;
+                    if (!arabic) throw new Error("Ayat nahi mili.");
+                    await sock.sendMessage(from, {
+                        text: `📖 *${surahName} — Ayat ${ayatNum}*\n\n${arabic}\n\n*Tarjuma:* ${urdu || ""}`,
+                    }, { quoted: msg });
+                } else {
+                    const res = await fetch(`https://api.alquran.cloud/v1/surah/${encodeURIComponent(surahNum)}`);
+                    const data = await res.json();
+                    const s = data?.data;
+                    if (!s) throw new Error("Surah nahi mili.");
+                    const ayats = (s.ayahs || []).length;
+                    await sock.sendMessage(from, {
+                        text: `📖 *Surah ${s.englishName} (${s.name})*\n\n🔢 Number: ${s.number}\n📝 Ayaats: ${ayats}\n📍 ${s.revelationType}\n\nKisi khaas ayat ke liye: *.quran ${s.number} <ayat number>*`,
+                    }, { quoted: msg });
+                }
+            } catch (err) {
+                await sock.sendMessage(from, { text: `❌ ${err.message}` }, { quoted: msg });
+            }
+        },
+    },
+    {
+        name: "hadith",
+        aliases: [],
+        description: "Random Hadith. Usage: .hadith [bukhari/muslim/tirmidhi]",
+        async execute(sock, { from, args, msg }) {
+            const book = (args[0] || "bukhari").toLowerCase();
+            try {
+                const res = await fetch(`https://random-hadith-generator.vercel.app/${encodeURIComponent(book)}/random`);
+                const data = await res.json();
+                const h = data?.data;
+                const text = h?.hadith_english || h?.text || h?.hadith;
+                if (!text) throw new Error("Hadith nahi mili, dusri book try karein (bukhari/muslim/tirmidhi).");
+                await sock.sendMessage(from, {
+                    text: `📿 *Hadith — ${h.book || book}*\n\n${text}\n\n${h.refno ? `Reference: ${h.refno}` : ""}`,
+                }, { quoted: msg });
+            } catch (err) {
+                await sock.sendMessage(from, { text: `❌ ${err.message}` }, { quoted: msg });
+            }
+        },
+    },
+    {
+        name: "dua",
+        aliases: ["duaa"],
+        description: "Roz marra ki duayen. Usage: .dua [number] (khali chodne par list milegi)",
+        async execute(sock, { from, args, msg }) {
+            const num = parseInt(args[0], 10);
+            if (!num || num < 1 || num > DUAS.length) {
+                let list = `🤲 *Dua List* — number bhejein (.dua <number>)\n\n`;
+                DUAS.forEach((d, i) => (list += `${i + 1}. ${d.title}\n`));
+                await sock.sendMessage(from, { text: list }, { quoted: msg });
+                return;
+            }
+            const d = DUAS[num - 1];
+            await sock.sendMessage(from, {
+                text: `🤲 *${d.title}*\n\n${d.arabic}\n\n_${d.translit}_\n\n📖 Meaning: ${d.meaning}`,
+            }, { quoted: msg });
+        },
+    },
+    {
+        name: "tasbeeh",
+        aliases: ["tasbih", "zikr"],
+        description: "Tasbeeh counter. Usage: .tasbeeh [count] | .tasbeeh reset | .tasbeeh SubhanAllah",
+        async execute(sock, { from, args, msg }) {
+            const arg = (args[0] || "").toLowerCase();
+            if (arg === "reset") {
+                const t = islamicdb.resetTasbeeh(from);
+                await sock.sendMessage(from, { text: `🔄 Tasbeeh reset ho gayi.\n\n📿 *${t.label}*: 0` }, { quoted: msg });
+                return;
+            }
+            if (arg && isNaN(parseInt(arg, 10))) {
+                // treat as a new zikr label, e.g. ".tasbeeh Alhamdulillah"
+                const label = args.join(" ");
+                const t = islamicdb.bumpTasbeeh(from, 0, label);
+                await sock.sendMessage(from, { text: `📿 Zikr set: *${t.label}*\nCount: ${t.count}\n\nAb *.tasbeeh* likh kar count barhayein.` }, { quoted: msg });
+                return;
+            }
+            const by = arg ? parseInt(arg, 10) : 1;
+            const t = islamicdb.bumpTasbeeh(from, by);
+            await sock.sendMessage(from, { text: `📿 *${t.label}*: ${t.count}` }, { quoted: msg });
+        },
+    },
+    {
+        name: "asmaulhusna",
+        aliases: ["99names", "allahnames"],
+        description: "Allah ke 99 naam. Usage: .asmaulhusna [1-99]",
+        async execute(sock, { from, args, msg }) {
+            const num = parseInt(args[0], 10);
+            if (num && num >= 1 && num <= ASMA_UL_HUSNA.length) {
+                const [name, meaning] = ASMA_UL_HUSNA[num - 1];
+                await sock.sendMessage(from, { text: `✨ *${num}. ${name}*\n\n${meaning}` }, { quoted: msg });
+                return;
+            }
+            const idx = Math.floor(Math.random() * ASMA_UL_HUSNA.length);
+            const [name, meaning] = ASMA_UL_HUSNA[idx];
+            await sock.sendMessage(from, {
+                text: `✨ *${idx + 1}. ${name}*\n\n${meaning}\n\nPoori list ke liye number dein: *.asmaulhusna 1* se *.asmaulhusna 99* tak.`,
+            }, { quoted: msg });
+        },
+    },
+    {
+        name: "sehriiftar",
+        aliases: ["sehri", "iftar"],
+        description: "Sehri/Iftar timings. Usage: .sehriiftar <city>",
+        async execute(sock, { from, args, msg }) {
+            const city = args.join(" ").trim() || "Faisalabad";
+            try {
+                const res = await fetch(`https://api.aladhan.com/v1/timingsByCity?city=${encodeURIComponent(city)}&country=Pakistan&method=1`);
+                const data = await res.json();
+                const t = data?.data?.timings;
+                if (!t) throw new Error("Timings nahi mile.");
+                await sock.sendMessage(from, {
+                    text: `🌙 *Sehri/Iftar — ${city}*\n\n🌅 Sehri (Fajr se pehle): ${t.Fajr}\n🌇 Iftar (Maghrib): ${t.Maghrib}\n\n📅 ${data.data.date?.readable || ""}`,
+                }, { quoted: msg });
+            } catch (err) {
+                await sock.sendMessage(from, { text: `❌ ${err.message}` }, { quoted: msg });
+            }
+        },
+    },
+    {
+        name: "azaan",
+        aliases: ["azaanreminder"],
+        description: "Namaz waqt pe automatic reminder. Usage: .azaan on <city> | .azaan off",
+        async execute(sock, { from, args, msg }) {
+            const choice = (args[0] || "").toLowerCase();
+            if (choice === "off") {
+                islamicdb.unsubscribeAzaan(from);
+                await sock.sendMessage(from, { text: "🔕 Azaan reminder band kar diya gaya." }, { quoted: msg });
+                return;
+            }
+            if (choice === "on") {
+                const city = args.slice(1).join(" ").trim() || "Faisalabad";
+                islamicdb.subscribeAzaan(from, city);
+                await sock.sendMessage(from, {
+                    text: `🔔 Azaan reminder ON kar diya (*${city}*).\nHar namaz ke waqt par yahan reminder aayega.\n\nBand karne ke liye: *.azaan off*`,
+                }, { quoted: msg });
+                return;
+            }
+            await sock.sendMessage(from, { text: "Usage:\n*.azaan on <city>* — reminder chalu karein\n*.azaan off* — reminder band karein" }, { quoted: msg });
+        },
+    },
+
+    {
+        name: "pdfsearch",
+        aliases: ["bookfind", "findbook"],
+        description: "Free PDF/books dhoondein — number chunte hi seedha PDF file mil jayegi. Usage: .pdfsearch <topic>",
+        async execute(sock, { from, args, msg }) {
+            const query = args.join(" ").trim();
+            if (!query) {
+                await sock.sendMessage(from, { text: "❌ Kis topic/book ki PDF chahiye?\nExample: *.pdfsearch calculus basics*" }, { quoted: msg });
+                return;
+            }
+            try {
+                await sock.sendMessage(from, { text: `🔎 "${query}" dhoond raha hoon...` }, { quoted: msg });
+                const url = `https://archive.org/advancedsearch.php?q=${encodeURIComponent(query)}+AND+mediatype:texts&fl[]=identifier&fl[]=title&rows=5&output=json`;
+                const res = await fetch(url);
+                const data = await res.json();
+                const docs = data?.response?.docs || [];
+                if (!docs.length) {
+                    await sock.sendMessage(from, { text: `❌ "${query}" ke liye koi PDF/book nahi mila.` }, { quoted: msg });
+                    return;
+                }
+                let list = `📚 *"${query}"* ke top results:\n\n`;
+                docs.forEach((d, i) => {
+                    list += `${i + 1}️⃣ ${d.title}\n`;
+                });
+                list += `\nReply karein *1-${docs.length}* — us book ki PDF seedha yahan bhej di jayegi.`;
+
+                module.exports.pendingPdfChoice.set(from, { results: docs.map((d) => ({ identifier: d.identifier, title: d.title })) });
+                await sock.sendMessage(from, { text: list }, { quoted: msg });
+            } catch (err) {
+                await sock.sendMessage(from, { text: `❌ ${err.message}` }, { quoted: msg });
+            }
+        },
+    },
+    {
+        name: "pdf",
+        aliases: ["pdfask", "pdfqa"],
+        description: "PDF bhejein ya kisi PDF pe reply karke sawal poochein. Usage: .pdf <sawal>",
+        async execute(sock, { from, args, msg }) {
+            const targetMsg = getTargetDocumentMessage(msg);
+            if (!targetMsg) {
+                await sock.sendMessage(from, { text: "❌ PDF bhejein ya kisi PDF pe reply karke *.pdf <sawal>* likhein." }, { quoted: msg });
+                return;
+            }
+            if (groq.getKeys().length === 0) return sock.sendMessage(from, { text: "⚠️ API key not set." });
+            const question = args.join(" ").trim() || "Is PDF ka short summary do.";
+            try {
+                await sock.sendMessage(from, { text: "📄 PDF padh raha hoon..." }, { quoted: msg });
+                const buffer = await downloadMediaMessage(targetMsg, "buffer", {});
+                const text = await extractPdfText(buffer);
+                if (!text.trim()) throw new Error("PDF se text nahi nikal saka (scanned/image PDF ho sakti hai).");
+                const trimmed = text.slice(0, 15000);
+                const data = await groq.groqChatWithFallback({
+                    model: "llama-3.3-70b-versatile",
+                    messages: [
+                        { role: "system", content: "You are a helpful assistant answering questions about a document. Answer in Roman Urdu/English mix, clearly and concisely, using only the provided document text." },
+                        { role: "user", content: `Document content:\n\n${trimmed}\n\nQuestion: ${question}` },
+                    ],
+                });
+                const reply = data.choices?.[0]?.message?.content;
+                await sock.sendMessage(from, { text: reply || "❌ Jawab nahi mil saka." }, { quoted: msg });
+            } catch (err) {
+                await sock.sendMessage(from, { text: `❌ ${err.message}` }, { quoted: msg });
+            }
+        },
+    },
+    {
+        name: "pdfsummary",
+        aliases: ["summarizepdf"],
+        description: "Poori PDF ka summary. Usage: kisi PDF pe reply karke .pdfsummary likhein",
+        async execute(sock, { from, msg }) {
+            const targetMsg = getTargetDocumentMessage(msg);
+            if (!targetMsg) {
+                await sock.sendMessage(from, { text: "❌ Kisi PDF pe reply karke *.pdfsummary* likhein." }, { quoted: msg });
+                return;
+            }
+            if (groq.getKeys().length === 0) return sock.sendMessage(from, { text: "⚠️ API key not set." });
+            try {
+                await sock.sendMessage(from, { text: "📄 Summary bana raha hoon..." }, { quoted: msg });
+                const buffer = await downloadMediaMessage(targetMsg, "buffer", {});
+                const text = await extractPdfText(buffer);
+                if (!text.trim()) throw new Error("PDF se text nahi nikal saka (scanned/image PDF ho sakti hai).");
+                const trimmed = text.slice(0, 20000);
+                const data = await groq.groqChatWithFallback({
+                    model: "llama-3.3-70b-versatile",
+                    messages: [
+                        { role: "system", content: "Summarize the given document clearly in Roman Urdu, covering all main points in bullet points where useful. Keep it concise but complete." },
+                        { role: "user", content: trimmed },
+                    ],
+                });
+                const reply = data.choices?.[0]?.message?.content;
+                await sock.sendMessage(from, { text: `📄 *Summary:*\n\n${reply || "Summary nahi ban saki."}` }, { quoted: msg });
+            } catch (err) {
+                await sock.sendMessage(from, { text: `❌ ${err.message}` }, { quoted: msg });
+            }
+        },
+    },
+    {
+        name: "homework",
+        aliases: ["solve", "assignment"],
+        description: "Homework/sawal step-by-step solve karwayein (text ya photo). Usage: .homework <sawal>",
+        async execute(sock, { from, args, msg }) {
+            if (groq.getKeys().length === 0) return sock.sendMessage(from, { text: "⚠️ API key not set." });
+            const question = args.join(" ").trim();
+            const targetMsg = getTargetImageMessage(msg);
+            try {
+                if (targetMsg) {
+                    await sock.sendMessage(from, { text: "📚 Sawal solve kar raha hoon..." }, { quoted: msg });
+                    const buffer = await downloadMediaMessage(targetMsg, "buffer", {});
+                    const base64 = buffer.toString("base64");
+                    const prompt = `You are a patient tutor. Solve the question(s) shown in this image step-by-step, explaining clearly in Roman Urdu/English mix so a student understands the working, not just the final answer.${question ? ` Extra context from student: ${question}` : ""}`;
+                    const data = await groq.groqVisionChat(base64, prompt);
+                    const reply = data.choices?.[0]?.message?.content;
+                    await sock.sendMessage(from, { text: reply || "❌ Solve nahi ho saka." }, { quoted: msg });
+                    return;
+                }
+                if (!question) {
+                    await sock.sendMessage(from, { text: "❌ Sawal likhein ya sawal ki photo bhejein/reply karein.\nExample: *.homework 2x + 5 = 15 ka hal karein*" }, { quoted: msg });
+                    return;
+                }
+                const data = await groq.groqChatWithFallback({
+                    model: "llama-3.3-70b-versatile",
+                    messages: [
+                        { role: "system", content: "You are a patient tutor. Solve the student's question step-by-step, explaining the working clearly in Roman Urdu/English mix, not just the final answer." },
+                        { role: "user", content: question },
+                    ],
+                });
+                const reply = data.choices?.[0]?.message?.content;
+                await sock.sendMessage(from, { text: reply || "❌ Solve nahi ho saka." }, { quoted: msg });
+            } catch (err) {
+                await sock.sendMessage(from, { text: `❌ ${err.message}` }, { quoted: msg });
+            }
+        },
+    },
+
+    // ============================================
+    // Group management
+    // ============================================
+    {
+        name: "tagall",
+        aliases: ["everyone"],
+        description: "Group ke sab members ko tag karein (admin only). Usage: .tagall [message]",
+        async execute(sock, { from, args, isGroup, msg, config }) {
+            if (!isGroup) return sock.sendMessage(from, { text: "❌ Sirf groups mein kaam karta hai." });
+            const senderJid = msg.key.participant || from;
+            const meta = await sock.groupMetadata(from).catch(() => null);
+            if (!meta) return sock.sendMessage(from, { text: "❌ Group info nahi mil saki." });
+            const senderParticipant = meta.participants.find((p) => p.id === senderJid);
+            const senderIsAdmin = senderParticipant?.admin === "admin" || senderParticipant?.admin === "superadmin";
+            if (!senderIsAdmin && !isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Sirf group admins ye command use kar sakte hain." });
+
+            const message = args.join(" ").trim() || "📢 Attention everyone!";
+            const mentions = meta.participants.map((p) => p.id);
+            const mentionText = mentions.map((id) => `@${id.split("@")[0]}`).join(" ");
+            await sock.sendMessage(from, { text: `${message}\n\n${mentionText}`, mentions });
+        },
+    },
+    {
+        name: "kick",
+        aliases: ["remove"],
+        description: "Group se member remove karein (admin only, reply karein us member ke message pe)",
+        async execute(sock, { from, args, isGroup, msg, config }) {
+            if (!isGroup) return sock.sendMessage(from, { text: "❌ Sirf groups mein kaam karta hai." });
+            const senderJid = msg.key.participant || from;
+            const meta = await sock.groupMetadata(from).catch(() => null);
+            if (!meta) return sock.sendMessage(from, { text: "❌ Group info nahi mil saki." });
+            const senderParticipant = meta.participants.find((p) => p.id === senderJid);
+            const senderIsAdmin = senderParticipant?.admin === "admin" || senderParticipant?.admin === "superadmin";
+            if (!senderIsAdmin && !isOwner(msg, config)) return sock.sendMessage(from, { text: "❌ Sirf group admins ye command use kar sakte hain." });
+
+            let targetJid = msg.message?.extendedTextMessage?.contextInfo?.participant;
+            if (!targetJid && args[0]) targetJid = args[0].replace(/[^0-9]/g, "") + "@s.whatsapp.net";
+            if (!targetJid) return sock.sendMessage(from, { text: "❓ Kis ko remove karna hai? Us ke message pe reply karein ya number dein." });
+
+            try {
+                await sock.groupParticipantsUpdate(from, [targetJid], "remove");
+                await sock.sendMessage(from, { text: `✅ Member remove kar diya.` });
+            } catch (err) {
+                await sock.sendMessage(from, { text: `❌ Remove nahi ho saka (bot ko group admin banayein): ${err.message}` });
+            }
+        },
+    },
+
+    // ============================================
+    // AI-assisted utilities
+    // ============================================
+    {
+        name: "clearchat",
+        aliases: ["resetai", "forget"],
+        description: "Is chat ki AI memory reset karein",
+        async execute(sock, { from, msg }) {
+            memory.forget(from);
+            await sock.sendMessage(from, { text: "🧹 AI memory clear kar di is chat ki — naye sirey se baat karte hain!" }, { quoted: msg });
+        },
+    },
+    {
+        name: "translate",
+        aliases: ["tr"],
+        description: "Text translate karein. Usage: .translate <language> <text>",
+        async execute(sock, { from, args, msg }) {
+            const targetLang = args[0];
+            const text = args.slice(1).join(" ");
+            if (!targetLang || !text) {
+                return sock.sendMessage(from, {
+                    text:
+                        `🌐 *Translate Usage:*\n\n` +
+                        `*.translate <language> <text>*\n\n` +
+                        `*Example:*\n` +
+                        `.translate english mera naam ali hai\n` +
+                        `.translate urdu my name is ali\n` +
+                        `.translate arabic kaisay ho\n\n` +
+                        `*Supported languages (naam se likhein):*\n` +
+                        `english, urdu, arabic, hindi, french, spanish, german, chinese, punjabi, turkish, russian, japanese, korean, italian, portuguese, bengali, persian\n\n` +
+                        `(In ke ilawa bhi koi language likhoge to AI try karega samajhne ka.)`,
+                }, { quoted: msg });
+            }
+
+            // Primary: Groq (best quality, understands Roman Urdu/mixed text well).
+            // Fallback: free MyMemory API (no key needed) if every Groq key fails.
+            try {
+                if (groq.getKeys().length > 0) {
+                    const data = await groq.groqChatWithFallback({
+                        model: "llama-3.3-70b-versatile",
+                        messages: [
+                            { role: "system", content: `Translate the user's text into ${targetLang}. Reply with ONLY the translation, nothing else — no notes, no quotes, no explanation.` },
+                            { role: "user", content: text },
+                        ],
+                    });
+                    const translated = data.choices?.[0]?.message?.content?.trim();
+                    if (translated) {
+                        await sock.sendMessage(from, { text: `🌐 ${translated}` }, { quoted: msg });
+                        return;
+                    }
+                }
+                throw new Error("Groq translation empty");
+            } catch (err) {
+                console.log("⚠️ Groq translate failed, using free fallback API:", err.message);
+                try {
+                    const translated = await translateFallback(text, targetLang);
+                    if (!translated) throw new Error("empty");
+                    await sock.sendMessage(from, { text: `🌐 ${translated}` }, { quoted: msg });
+                } catch (err2) {
+                    await sock.sendMessage(from, { text: "❌ Translate nahi ho saka, thori dair baad try karein." }, { quoted: msg });
+                }
+            }
+        },
+    },
+    {
+        name: "shayari",
+        aliases: ["poetry"],
+        description: "AI se Urdu shayari. Usage: .shayari [topic]",
+        async execute(sock, { from, args, msg }) {
+            if (groq.getKeys().length === 0) return sock.sendMessage(from, { text: "⚠️ API key not set." });
+            const topic = args.join(" ").trim() || "mohabbat";
+            try {
+                const data = await groq.groqChatWithFallback({
+                    model: "llama-3.3-70b-versatile",
+                    messages: [
+                        { role: "system", content: "You write short, beautiful 2-4 line Urdu shayari in Roman Urdu script. Reply with ONLY the shayari, nothing else." },
+                        { role: "user", content: `Shayari likho "${topic}" ke topic par.` },
+                    ],
+                });
+                const shayari = data.choices?.[0]?.message?.content;
+                await sock.sendMessage(from, { text: `✨ ${shayari || "Shayari nahi ban saki."}` }, { quoted: msg });
+            } catch (err) {
+                await sock.sendMessage(from, { text: `❌ ${err.message}` }, { quoted: msg });
+            }
+        },
+    },
+    {
+        name: "joke",
+        aliases: ["lateefa"],
+        description: "Ek random joke",
+        async execute(sock, { from, msg }) {
+            if (groq.getKeys().length === 0) return sock.sendMessage(from, { text: "⚠️ API key not set." });
+            try {
+                const data = await groq.groqChatWithFallback({
+                    model: "llama-3.3-70b-versatile",
+                    messages: [
+                        { role: "system", content: "Tell one short, clean, funny joke in Roman Urdu/English mix. Reply with ONLY the joke." },
+                        { role: "user", content: "Ek joke sunao." },
+                    ],
+                });
+                const joke = data.choices?.[0]?.message?.content;
+                await sock.sendMessage(from, { text: `😂 ${joke || "Joke nahi soch saka abhi."}` }, { quoted: msg });
+            } catch (err) {
+                await sock.sendMessage(from, { text: `❌ ${err.message}` }, { quoted: msg });
+            }
+        },
+    },
+    {
+        name: "quote",
+        aliases: ["motivation"],
+        description: "Motivational ya Islamic quote",
+        async execute(sock, { from, msg }) {
+            if (groq.getKeys().length === 0) return sock.sendMessage(from, { text: "⚠️ API key not set." });
+            try {
+                const data = await groq.groqChatWithFallback({
+                    model: "llama-3.3-70b-versatile",
+                    messages: [
+                        { role: "system", content: "Share one short motivational quote (Islamic wisdom or general life advice) in Roman Urdu or English. Reply with ONLY the quote." },
+                        { role: "user", content: "Aaj ka ek quote do." },
+                    ],
+                });
+                const quote = data.choices?.[0]?.message?.content;
+                await sock.sendMessage(from, { text: `💭 ${quote || "Quote nahi mil saka."}` }, { quoted: msg });
+            } catch (err) {
+                await sock.sendMessage(from, { text: `❌ ${err.message}` }, { quoted: msg });
+            }
+        },
+    },
+
+    // ============================================
+    // Fun / entertainment
+    // ============================================
+    {
+        name: "truthordare",
+        aliases: ["tod"],
+        description: "Truth ya dare khelein. Usage: .truthordare [truth|dare]",
+        async execute(sock, { from, args, msg }) {
+            const truths = [
+                "Aapki sabse embarrassing memory kya hai?",
+                "Kisi se jhoot bola ho recently, kya tha?",
+                "Aapka crush kaun hai (ya tha)?",
+                "Aapki sabse buri aadat kya hai?",
+            ];
+            const dares = [
+                "Apni akhri message zor se parh kar sunayein.",
+                "Ek minute tak bina hansay rahein.",
+                "Group ke kisi member ko abhi ek compliment dein.",
+                "Apni voice mein ek gaana ga kar bhejein.",
+            ];
+            const choice = args[0]?.toLowerCase();
+            const pick =
+                choice === "dare" ? dares[Math.floor(Math.random() * dares.length)]
+                : choice === "truth" ? truths[Math.floor(Math.random() * truths.length)]
+                : Math.random() > 0.5 ? `TRUTH: ${truths[Math.floor(Math.random() * truths.length)]}`
+                : `DARE: ${dares[Math.floor(Math.random() * dares.length)]}`;
+            await sock.sendMessage(from, { text: `🎲 ${pick}` }, { quoted: msg });
+        },
+    },
+    {
+        name: "compatibility",
+        aliases: ["lovemeter"],
+        description: "Fun love compatibility (sirf timepass!). Usage: .compatibility <naam1> <naam2>",
+        async execute(sock, { from, args, msg }) {
+            if (args.length < 2) return sock.sendMessage(from, { text: "Usage: .compatibility Ali Sara" });
+            const [name1, name2] = args;
+            const combined = (name1 + name2).toLowerCase();
+            let hash = 0;
+            for (let i = 0; i < combined.length; i++) hash = (hash * 31 + combined.charCodeAt(i)) % 101;
+            const bar = "█".repeat(Math.round(hash / 10)) + "░".repeat(10 - Math.round(hash / 10));
+            await sock.sendMessage(from, { text: `💘 *${name1} + ${name2}*\n\n${bar} ${hash}%\n\n(Sirf timepass ke liye! 😄)` }, { quoted: msg });
+        },
+    },
+    {
+        name: "riddle",
+        aliases: ["paheli"],
+        description: "Ek random riddle/paheli",
+        async execute(sock, { from, msg }) {
+            const riddles = [
+                { q: "Woh kya cheez hai jo bolti hai lekin muh nahi hai?", a: "Echo (Awaz ki goonj)" },
+                { q: "Jo cheez jitni zyada nikaali jaye, utna bara gaddha ban jata hai. Kya hai wo?", a: "Kuwan (Well)" },
+                { q: "Do behnain hain, ek dusri ko dekhti nahi. Kaun hain?", a: "Aankhein" },
+                { q: "Woh kya hai jo raat ko aata hai bina bulaye, aur din mein chala jata hai bina kahe?", a: "Sitaray" },
+            ];
+            const pick = riddles[Math.floor(Math.random() * riddles.length)];
+            await sock.sendMessage(from, { text: `🧩 *Paheli:*\n${pick.q}\n\n_Jawab: reply karein ".riddle answer" — ya khud sochein!_` }, { quoted: msg });
+        },
+    },
+
+    // ============================================
+    // Utilities
+    // ============================================
+    {
+        name: "currency",
+        aliases: ["convert", "exchangerate"],
+        description: "Currency convert karein. Usage: .currency <amount> <from> <to>",
+        async execute(sock, { from, args, msg }) {
+            const [amountStr, fromCur, toCur] = args;
+            const amount = parseFloat(amountStr);
+            if (!amount || !fromCur || !toCur) return sock.sendMessage(from, { text: "Usage: .currency 100 USD PKR" });
+            try {
+                const res = await fetch(`https://api.exchangerate-api.com/v4/latest/${fromCur.toUpperCase()}`);
+                const data = await res.json();
+                const rate = data?.rates?.[toCur.toUpperCase()];
+                if (!rate) throw new Error("Currency code galat hai ya rate nahi mila.");
+                const result = (amount * rate).toFixed(2);
+                await sock.sendMessage(from, { text: `💱 ${amount} ${fromCur.toUpperCase()} = *${result} ${toCur.toUpperCase()}*` }, { quoted: msg });
+            } catch (err) {
+                await sock.sendMessage(from, { text: `❌ ${err.message}` }, { quoted: msg });
+            }
+        },
+    },
+    {
+        name: "qr",
+        aliases: ["qrcode"],
+        description: "QR code banayein. Usage: .qr <text/link>",
+        async execute(sock, { from, args, msg }) {
+            const text = args.join(" ").trim();
+            if (!text) return sock.sendMessage(from, { text: "Usage: .qr <text ya link>" });
+            const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(text)}`;
+            await sock.sendMessage(from, { image: { url: qrUrl }, caption: `📱 QR Code: ${text}` }, { quoted: msg });
+        },
+    },
+    {
+        name: "calc",
+        aliases: ["calculate"],
+        description: "Calculator. Usage: .calc 25*4+10",
+        async execute(sock, { from, args, msg }) {
+            const expr = args.join(" ");
+            if (!expr) return sock.sendMessage(from, { text: "Usage: .calc 25*4+10" });
+            if (!/^[0-9+\-*/().\s%]+$/.test(expr)) {
+                return sock.sendMessage(from, { text: "❌ Sirf numbers aur + - * / ( ) use karein." }, { quoted: msg });
+            }
+            try {
+                const result = Function(`"use strict"; return (${expr})`)();
+                await sock.sendMessage(from, { text: `🧮 ${expr} = *${result}*` }, { quoted: msg });
+            } catch {
+                await sock.sendMessage(from, { text: "❌ Expression samajh nahi aayi." }, { quoted: msg });
+            }
+        },
+    },
+    {
+        name: "remind",
+        aliases: ["reminder"],
+        description: "Reminder set karein. Usage: .remind <minutes> <message>",
+        async execute(sock, { from, args, msg }) {
+            const minutes = parseFloat(args[0]);
+            const message = args.slice(1).join(" ");
+            if (!minutes || minutes <= 0 || !message) return sock.sendMessage(from, { text: "Usage: .remind 30 namaz ka waqt ho gaya" });
+            if (minutes > 1440) return sock.sendMessage(from, { text: "❌ Max 1440 minutes (24 ghante) tak ka reminder set kar sakte hain." });
+            await sock.sendMessage(from, { text: `⏰ Theek hai, ${minutes} minute mein yaad dila dunga: "${message}"` }, { quoted: msg });
+            setTimeout(() => {
+                sock.sendMessage(from, { text: `⏰ *Reminder:* ${message}` }).catch(() => {});
+            }, minutes * 60 * 1000);
+        },
+    },
+    {
+        name: "poll",
+        aliases: ["vote"],
+        description: "Poll banayein. Usage: .poll Question | Option1 | Option2",
+        async execute(sock, { from, text, msg }) {
+            const body = text.slice(text.indexOf(" ") + 1);
+            const parts = body.split("|").map((p) => p.trim()).filter(Boolean);
+            if (parts.length < 3) return sock.sendMessage(from, { text: "Usage: .poll Question | Option1 | Option2\nExample: .poll Lunch kahan karein? | Pizza | Biryani | BBQ" }, { quoted: msg });
+            const [question, ...options] = parts;
+            await sock.sendMessage(from, { poll: { name: question, values: options.slice(0, 12), selectableCount: 1 } });
+        },
+    },
+    {
+        name: "define",
+        aliases: ["dictionary", "meaning"],
+        description: "English word ka meaning. Usage: .define <word>",
+        async execute(sock, { from, args, msg }) {
+            const word = args[0];
+            if (!word) return sock.sendMessage(from, { text: "Usage: .define <word>" });
+            try {
+                const res = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`);
+                const data = await res.json();
+                if (!Array.isArray(data)) throw new Error("Word nahi mila.");
+                const entry = data[0];
+                const meaning = entry.meanings?.[0];
+                const def = meaning?.definitions?.[0];
+                const text = `📖 *${entry.word}* (${meaning?.partOfSpeech || ""})\n\n${def?.definition || "Definition nahi mili."}` +
+                    (def?.example ? `\n\n_Example: ${def.example}_` : "");
+                await sock.sendMessage(from, { text }, { quoted: msg });
+            } catch {
+                await sock.sendMessage(from, { text: `❌ "${word}" ka meaning nahi mila.` }, { quoted: msg });
+            }
+        },
+    },
+    {
+        name: "toimg",
+        aliases: ["take"],
+        description: "Sticker ko wapas image mein convert karein (sticker pe reply karein)",
+        async execute(sock, { from, msg }) {
+            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            const targetMsg = quoted ? { message: quoted, key: msg.key } : msg;
+            if (!targetMsg.message?.stickerMessage) return sock.sendMessage(from, { text: "❌ Kisi sticker pe reply karein *.toimg* ke sath." });
+            try {
+                const buffer = await downloadMediaMessage(targetMsg, "buffer", {});
+                await sock.sendMessage(from, { image: buffer, caption: "✅ Converted!" }, { quoted: msg });
+            } catch (err) {
+                await sock.sendMessage(from, { text: `❌ Convert nahi ho saka: ${err.message}` }, { quoted: msg });
+            }
+        },
+    },
+    {
+        name: "statusdl",
+        aliases: ["savestatus"],
+        description: "Kisi forward hui status ko save karein — us message pe reply karein",
+        async execute(sock, { from, msg }) {
+            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            if (!quoted) return sock.sendMessage(from, { text: "❓ Status wale message pe reply karein *.statusdl* ke sath." });
+            const targetMsg = { message: quoted, key: msg.key };
+            try {
+                const buffer = await downloadMediaMessage(targetMsg, "buffer", {});
+                if (quoted.imageMessage) {
+                    await sock.sendMessage(from, { image: buffer, caption: "✅ Status saved!" }, { quoted: msg });
+                } else if (quoted.videoMessage) {
+                    await sock.sendMessage(from, { video: buffer, caption: "✅ Status saved!" }, { quoted: msg });
+                } else {
+                    await sock.sendMessage(from, { text: "❌ Ye media type support nahi hoti." }, { quoted: msg });
+                }
+            } catch (err) {
+                await sock.sendMessage(from, { text: `❌ Save nahi ho saka: ${err.message}` }, { quoted: msg });
+            }
+        },
+    },
+
+    // ============================================
+    // Social media downloaders (best-effort — please test these live;
+    // third-party download APIs occasionally change their response format)
+    // ============================================
+    {
+        name: "instagram",
+        aliases: ["ig", "insta"],
+        description: "Instagram reel/post download karein. Usage: .instagram <link>",
+        async execute(sock, { from, args, msg, config }) {
+            const url = args[0];
+            if (!url || !url.includes("instagram.com")) return sock.sendMessage(from, { text: "❌ Valid Instagram link dein." });
+            try {
+                await genericVideoDownload(sock, { from, msg, url, label: "Instagram", emoji: "📸" });
+            } catch (err) {
+                console.log("❌ Instagram download error:", err.message);
+                if (isOwner(msg, config)) {
+                    await sock.sendMessage(from, { text: `❌ Failed: ${err.message}` }, { quoted: msg });
+                } else {
+                    await sock.sendMessage(from, { text: "❌ Ye download nahi ho saka (post private ho sakta hai ya login chahiye). Public reel/post ka link try karein." }, { quoted: msg });
+                }
+            }
+        },
+    },
+    {
+        name: "facebook",
+        aliases: ["fb"],
+        description: "Facebook video download karein. Usage: .facebook <link>",
+        async execute(sock, { from, args, msg, config }) {
+            const url = args[0];
+            if (!url || (!url.includes("facebook.com") && !url.includes("fb.watch"))) return sock.sendMessage(from, { text: "❌ Valid Facebook link dein." });
+            try {
+                await genericVideoDownload(sock, { from, msg, url, label: "Facebook", emoji: "📘" });
+            } catch (err) {
+                console.log("❌ Facebook download error:", err.message);
+                if (isOwner(msg, config)) {
+                    await sock.sendMessage(from, { text: `❌ Failed: ${err.message}` }, { quoted: msg });
+                } else {
+                    await sock.sendMessage(from, { text: "❌ Ye download nahi ho saka. Public video ka link try karein." }, { quoted: msg });
+                }
+            }
+        },
+    },
+    {
+        name: "twitter",
+        aliases: ["x"],
+        description: "Twitter/X video download karein. Usage: .twitter <link>",
+        async execute(sock, { from, args, msg, config }) {
+            const url = args[0];
+            if (!url || (!url.includes("twitter.com") && !url.includes("x.com"))) return sock.sendMessage(from, { text: "❌ Valid Twitter/X link dein." });
+            try {
+                await genericVideoDownload(sock, { from, msg, url, label: "Twitter/X", emoji: "🐦" });
+            } catch (err) {
+                console.log("❌ Twitter download error:", err.message);
+                if (isOwner(msg, config)) {
+                    await sock.sendMessage(from, { text: `❌ Failed: ${err.message}` }, { quoted: msg });
+                } else {
+                    await sock.sendMessage(from, { text: "❌ Ye download nahi ho saka. Public tweet video ka link try karein." }, { quoted: msg });
+                }
+            }
+        },
+    },
+
+    // ============================================
+    // Informative (news-based, no AI tokens spent)
+    // ============================================
+    {
+        name: "cricket",
+        aliases: ["score"],
+        description: "Latest cricket score/news",
+        async execute(sock, { from, args, msg }) {
+            const query = args.join(" ").trim() || "Pakistan cricket score";
+            try {
+                const res = await fetch(`https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-PK&gl=PK&ceid=PK:en`);
+                const xml = await res.text();
+                const items = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)].slice(0, 5);
+                if (items.length === 0) return sock.sendMessage(from, { text: "❌ Koi score/news nahi mili." }, { quoted: msg });
+                const decode = (s) => (s || "").replace(/<!\[CDATA\[/g, "").replace(/\]\]>/g, "").replace(/&amp;/g, "&").replace(/&#39;/g, "'").replace(/&quot;/g, '"');
+                const lines = items.map((m) => `🏏 ${decode(m[1].match(/<title>(.*?)<\/title>/)?.[1] || "")}`);
+                await sock.sendMessage(from, { text: `🏏 *Cricket Updates*\n\n${lines.join("\n\n")}` }, { quoted: msg });
+            } catch (err) {
+                await sock.sendMessage(from, { text: `❌ ${err.message}` }, { quoted: msg });
+            }
+        },
+    },
+    {
+        name: "petrol",
+        aliases: ["fuelprice"],
+        description: "Pakistan mein aaj ki petrol/diesel price news",
+        async execute(sock, { from, msg }) {
+            try {
+                const res = await fetch(`https://news.google.com/rss/search?q=petrol+price+pakistan&hl=en-PK&gl=PK&ceid=PK:en`);
+                const xml = await res.text();
+                const items = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)].slice(0, 4);
+                const decode = (s) => (s || "").replace(/<!\[CDATA\[/g, "").replace(/\]\]>/g, "").replace(/&amp;/g, "&").replace(/&#39;/g, "'").replace(/&quot;/g, '"');
+                const lines = items.map((m) => `⛽ ${decode(m[1].match(/<title>(.*?)<\/title>/)?.[1] || "")}`);
+                await sock.sendMessage(from, { text: `⛽ *Petrol Price Updates*\n\n${lines.join("\n\n") || "Nahi mili."}\n\n_(Ye news headlines hain — exact rate confirm kar lein.)_` }, { quoted: msg });
+            } catch (err) {
+                await sock.sendMessage(from, { text: `❌ ${err.message}` }, { quoted: msg });
+            }
+        },
+    },
+    {
+        name: "gold",
+        aliases: ["goldrate"],
+        description: "Pakistan mein aaj ka gold rate news",
+        async execute(sock, { from, msg }) {
+            try {
+                const res = await fetch(`https://news.google.com/rss/search?q=gold+rate+pakistan+today&hl=en-PK&gl=PK&ceid=PK:en`);
+                const xml = await res.text();
+                const items = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)].slice(0, 4);
+                const decode = (s) => (s || "").replace(/<!\[CDATA\[/g, "").replace(/\]\]>/g, "").replace(/&amp;/g, "&").replace(/&#39;/g, "'").replace(/&quot;/g, '"');
+                const lines = items.map((m) => `🪙 ${decode(m[1].match(/<title>(.*?)<\/title>/)?.[1] || "")}`);
+                await sock.sendMessage(from, { text: `🪙 *Gold Rate Updates*\n\n${lines.join("\n\n") || "Nahi mila."}\n\n_(Ye news headlines hain — exact rate confirm kar lein.)_` }, { quoted: msg });
+            } catch (err) {
+                await sock.sendMessage(from, { text: `❌ ${err.message}` }, { quoted: msg });
+            }
+        },
+    },
 ];
 
 module.exports = allCommands;
