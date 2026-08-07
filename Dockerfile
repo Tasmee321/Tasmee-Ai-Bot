@@ -18,9 +18,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN python3 -m pip install --no-cache-dir --upgrade pip && \
     python3 -m pip install --no-cache-dir "yt-dlp[default]"
 
-# Install Deno (JS runtime for yt-dlp)
-RUN curl -fsSL https://deno.land/install.sh | sh
-ENV PATH="/root/.deno/bin:${PATH}"
+# Install Deno globally for yt-dlp challenge solving
+RUN curl -fsSL https://deno.land/install.sh | sh && \
+    cp /root/.deno/bin/deno /usr/local/bin/deno
 
 # Copy package files
 COPY package*.json ./
