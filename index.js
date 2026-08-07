@@ -210,6 +210,24 @@ let sockRef = null;
 let latestQR = null;
 
 // ============================================
+// Reconnect guard — prevents the "reconnect storm" bug where a close
+// event fires startBot() again with zero delay, spinning up a second
+// socket on the SAME session while the first is still tearing down.
+// WhatsApp then sees two clients on one session, treats it as a
+// conflict, and kills both — which triggers another close, another
+// startBot(), and so on, dozens of times per second. We fix this with:
+//   1. isReconnecting flag — never allow two startBot() calls in flight.
+//   2. Exponential backoff — wait longer after each consecutive failure,
+//      reset back to the minimum once a connection stays open.
+//   3. One backupSession interval total, not one added per reconnect.
+// ============================================
+let isReconnecting = false;
+let reconnectAttempts = 0;
+let backupIntervalHandle = null;
+const RECONNECT_BASE_DELAY_MS = 3000; // 3s
+const RECONNECT_MAX_DELAY_MS = 60000; // cap at 60s
+
+// ============================================
 // Load all commands from commands.js
 // ============================================
 const commandList = require("./commands");
@@ -484,6 +502,12 @@ async function transcribeVoice(buffer) {
 // Start WhatsApp Connection
 // ============================================
 async function startBot() {
+    if (isReconnecting) {
+        console.log("⏳ startBot() already in progress — skipping duplicate call.");
+        return;
+    }
+    isReconnecting = true;
+
     restoreSessionFromEnv();
 
     const { state, saveCreds } = await useMultiFileAuthState(SESSION_FOLDER);
@@ -534,20 +558,46 @@ async function startBot() {
         }
 
         if (connection === "close") {
-            const shouldReconnect =
-                new Boom(lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut;
-            console.log("Connection band ho gayi. Reconnect:", shouldReconnect);
-            if (shouldReconnect) startBot();
+            isReconnecting = false; // this attempt is over, next startBot() call may proceed
+            const statusCode = new Boom(lastDisconnect?.error)?.output?.statusCode;
+            const loggedOut = statusCode === DisconnectReason.loggedOut;
+
+            if (loggedOut) {
+                // Session is permanently invalid (unlinked from phone, banned,
+                // or replaced by another device). Reconnecting with the same
+                // creds.json would just loop forever with "conflict" errors.
+                // Wipe the local session so the bot falls back to fresh
+                // QR/pairing-code mode instead of storming reconnects.
+                console.log("🚪 Session logged out ho gaya (WhatsApp se unlink). Local session clear kar raha hoon — dobara /qr ya /pair se link karein.");
+                try {
+                    fs.rmSync(SESSION_FOLDER, { recursive: true, force: true });
+                } catch (err) {
+                    console.log("⚠️ Session folder clear karne mein error:", err.message);
+                }
+                reconnectAttempts = 0;
+                setTimeout(startBot, RECONNECT_BASE_DELAY_MS);
+                return;
+            }
+
+            reconnectAttempts++;
+            const delay = Math.min(RECONNECT_BASE_DELAY_MS * 2 ** (reconnectAttempts - 1), RECONNECT_MAX_DELAY_MS);
+            console.log(`Connection band ho gayi. ${Math.round(delay / 1000)}s mein reconnect karunga (attempt ${reconnectAttempts})...`);
+            setTimeout(startBot, delay);
         } else if (connection === "open") {
             console.log("✅ Bot successfully connect ho gaya WhatsApp se!");
             latestQR = null;
+            reconnectAttempts = 0; // connection is healthy again, reset backoff
             if (config.ALWAYS_ONLINE === "true" || config.ALWAYS_ONLINE === true) {
                 setInterval(() => {
                     sock.sendPresenceUpdate("available").catch(() => {});
                 }, 30000);
             }
             backupSession();
-            setInterval(backupSession, SESSION_BACKUP_INTERVAL_MS);
+            if (!backupIntervalHandle) {
+                // Only ever create ONE recurring backup interval, no matter how
+                // many times the bot reconnects over its lifetime.
+                backupIntervalHandle = setInterval(backupSession, SESSION_BACKUP_INTERVAL_MS);
+            }
         }
     });
 
