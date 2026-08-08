@@ -183,6 +183,17 @@ function isDownloadRequest(text) {
     return DOWNLOAD_TOPIC_REGEX.test(text) && WANT_REGEX.test(text);
 }
 
+// If a natural-language download request already includes the actual
+// song/video name in the same message (e.g. "song download moonrise",
+// "moonrise gana bhej do"), strip out the trigger/filler words and use
+// whatever's left as the search query directly — instead of asking
+// "which song?" again when the user already told us.
+const DOWNLOAD_FILLER_WORDS_REGEX =
+    /\b(song|gana|gaana|track|music|video|chahiye|chaiye|chahye|chahiy|do|bhejo|send|download|dedo|kardo|please|plz|mujhe|muje|ek|ka|ki|ke|se|mein|mai)\b/gi;
+function extractDownloadQuery(text) {
+    return text.replace(DOWNLOAD_FILLER_WORDS_REGEX, " ").replace(/\s+/g, " ").trim();
+}
+
 const TTS_TOPIC_REGEX = /\bvoice\s*note\b|\bawaaz\s*mein\b|\bbol\s*kar\s*sunao\b|\bpadh\s*kar\s*sunao\b/i;
 const TTS_ACTION_REGEX = /\b(bana|bnao|bnado|bna|karo|kardo|bhejo|chahiye|chaiye)\b/i;
 function isTtsRequest(text) {
@@ -226,6 +237,23 @@ function looksLikeUnrelatedReply(text, prefix) {
         URGENT_CONTACT_REGEX.test(trimmed) ||
         CASUAL_FILLER_REGEX.test(trimmed)
     );
+}
+
+// ============================================
+// Very lightweight language check for the few hardcoded follow-up prompts
+// below ("which song?", "what text?", "what image?") — these fire directly
+// from plain regex matches (no AI call), so they can't otherwise pick up
+// on the user having said "talk in English" earlier. If the message has
+// no Roman-Urdu marker words AND is plain ASCII, reply in English;
+// otherwise default to Roman Urdu as before.
+// ============================================
+const ROMAN_URDU_MARKER_REGEX =
+    /\b(hai|hy|hoon|hun|ho|kya|chahiye|chaiye|chahye|kar|karo|kardo|bhejo|dedo|mujhe|muje|nahi|nai|acha|accha|theek|thik|zaroor|wala|wali|mein|main|ka|ki|ke|se|aap|tum|kaisay|kaisa|kese|kesa|gana|gaana|tasveer|awaaz)\b/i;
+function preferEnglishReply(text) {
+    const trimmed = (text || "").trim();
+    if (!trimmed) return false;
+    const isPlainAscii = /^[\x00-\x7F]*$/.test(trimmed);
+    return isPlainAscii && !ROMAN_URDU_MARKER_REGEX.test(trimmed);
 }
 
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -981,13 +1009,29 @@ async function startBot() {
                 return;
             }
 
-            // Natural "mujhe gana chahiye" / "video chahiye" style request —
-            // ask which one, then actually download it once they answer
-            // (handled by the pendingSongRequest check above).
+            // Natural "mujhe gana chahiye" / "video chahiye" style request.
+            // If the name/link is already in this same message (e.g. "song
+            // download moonrise"), skip asking and search directly. Only
+            // ask "which one?" when nothing usable is left after stripping
+            // the trigger words.
             if (!isGroup && !msg.key.fromMe && text.trim() && isDownloadRequest(text)) {
+                const explicitVideo = /\bvideo\b/i.test(text);
+                const extractedQuery = extractDownloadQuery(text);
+                if (extractedQuery.length >= 2) {
+                    await commandList.startYtFlow(sock, {
+                        from,
+                        msg,
+                        query: extractedQuery,
+                        wantsVideo: explicitVideo ? true : null,
+                        config,
+                    });
+                    return;
+                }
                 setPending(pendingSongRequest, from);
                 await sock.sendMessage(from, {
-                    text: "🎵 Zaroor! Konsa gana ya video chahiye? Naam ya link bhej dein.",
+                    text: preferEnglishReply(text)
+                        ? "🎵 Sure! Which song or video do you need? Send the name or a link."
+                        : "🎵 Zaroor! Konsa gana ya video chahiye? Naam ya link bhej dein.",
                 }, { quoted: msg });
                 return;
             }
@@ -998,7 +1042,9 @@ async function startBot() {
             if (!isGroup && !msg.key.fromMe && text.trim() && isTtsRequest(text)) {
                 setPending(pendingTTSRequest, from);
                 await sock.sendMessage(from, {
-                    text: "🎙️ Theek hai! Kaunsa text voice note mein chahiye? Likh dein.",
+                    text: preferEnglishReply(text)
+                        ? "🎙️ Sure! What text should I turn into a voice note? Type it out."
+                        : "🎙️ Theek hai! Kaunsa text voice note mein chahiye? Likh dein.",
                 }, { quoted: msg });
                 return;
             }
@@ -1013,7 +1059,9 @@ async function startBot() {
                     if (ts && Date.now() - ts >= PENDING_INTENT_TTL) commandList.pendingImage.delete(from);
                 }, PENDING_INTENT_TTL);
                 await sock.sendMessage(from, {
-                    text: "🖼️ Zaroor! Kis cheez ki image chahiye? Naam bata dein.",
+                    text: preferEnglishReply(text)
+                        ? "🖼️ Sure! What should the image be of? Tell me what you need."
+                        : "🖼️ Zaroor! Kis cheez ki image chahiye? Naam bata dein.",
                 }, { quoted: msg });
                 return;
             }
