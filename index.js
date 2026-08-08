@@ -991,16 +991,6 @@ async function startBot() {
                 if (Date.now() - lastReply < AI_COOLDOWN_MS) return;
                 aiCooldown.set(from, Date.now());
 
-                // First message ever from this chat, or first message after
-                // being quiet for 1+ hour (memory.js auto-expires at that
-                // point) — send the full command menu once so they discover
-                // everything the bot can do, then continue answering normally.
-                const { history } = memory.getContext(from);
-                if (history.length === 0) {
-                    const helpCmd = commandList.find((c) => c.name === "help");
-                    if (helpCmd) await helpCmd.execute(sock, { from, config, allCommands: commandList }).catch(() => {});
-                }
-
                 const answer = await getAiReply(text, from, sock, msg);
                 if (answer) {
                     await sock.sendPresenceUpdate("composing", from).catch(() => {});
