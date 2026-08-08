@@ -173,17 +173,28 @@ async function webSearch(query, maxResults = 4) {
 
 // Questions that likely need live/current info — triggers an automatic
 // web-search context injection for the AI, in addition to the always-on
-// current-date info.
+// current-date info. Kept intentionally NARROW: this only exists as a
+// fallback for paths where the AI has no tool-calling ability of its own
+// (see enableProactiveSearch below) — it must not fire on ordinary chat
+// just because it contains common words like "abhi", "kal", "update",
+// "kaun hai" etc., which show up constantly in normal conversation.
 const REALTIME_INFO_REGEX =
-    /\b(today|aaj|abhi|is\s*waqt|current|currently|latest|newest|update[ds]?|breaking|news|khabr|price|rate|score|match|result|kal|kaun\s*hai|who\s*is|when\s*is|kab\s*hai|is\s*saal|this\s*year)\b/i;
+    /\b(breaking\s*news|latest\s*news|top\s*headlines|aaj\s*ki\s*khabr|(today'?s|aaj\s*ka|abhi\s*ka|current)\s*(price|rate|weather|mausam|score)|petrol\s*(price|rate)|gold\s*rate|dollar\s*rate|exchange\s*rate|cricket\s*score|match\s*score|live\s*score|stock\s*price)\b/i;
 
 // Builds the final system prompt: base persona + today's date, and (when the
 // question looks time-sensitive) a block of live web search results for the
 // model to answer from in its own words.
-async function buildSystemPrompt(basePersona, question) {
+//
+// enableProactiveSearch (default true): pass false when the caller will use
+// real tool-calling (a `web_search` function the model can invoke itself,
+// see AI_TOOLS below) — in that case the AI can decide on its own, per
+// message, whether a question actually needs live info, which is far more
+// accurate than this blunt keyword regex and avoids searching the web for
+// ordinary chat messages that happen to contain a matching word.
+async function buildSystemPrompt(basePersona, question, enableProactiveSearch = true) {
     let systemPrompt = `Aaj ki tareekh aur waqt: ${getPakistanDateTimeString()}.\n\n${basePersona || "You are a helpful assistant."}`;
 
-    if (REALTIME_INFO_REGEX.test(question || "")) {
+    if (enableProactiveSearch && REALTIME_INFO_REGEX.test(question || "")) {
         const results = await webSearch(question, 3);
         if (results.length > 0) {
             const context = results
@@ -801,7 +812,36 @@ const AI_TOOLS = [
             },
         },
     },
+    {
+        type: "function",
+        function: {
+            name: "run_bot_command",
+            description:
+                "Run any other built-in bot command directly by its exact name, for anything not already covered by a more specific tool above. Covers things like: translate, currency, qr, calc, remind, poll, define, joke, shayari, quote, riddle, truthordare, compatibility, tagall, kick, clearchat, sticker, toimg, statusdl, instagram, facebook, twitter, tiktok, cricket, petrol, gold, pdf, pdfsummary, analyze, ocr, imgurl, ping, alive, owner, repo, settings, and any bot/group settings or owner-only command (welcome, goodbye, antilink, antibadword, mode, ban, sudo, broadcast, etc — these already check permissions internally and will politely refuse if the requester isn't the owner). Use this whenever the user's request clearly matches one of these named commands.",
+            parameters: {
+                type: "object",
+                properties: {
+                    command: {
+                        type: "string",
+                        description: "Exact canonical command name, no dot prefix — e.g. 'translate', 'currency', 'qr', 'joke', 'cricket', 'petrol', 'tagall', 'sticker', 'ban'",
+                    },
+                    args: {
+                        type: "string",
+                        description: "Everything the user would normally type after the command, as plain space-separated text (e.g. for translate: 'french Hello there'). Omit or leave empty if the command needs no extra input.",
+                    },
+                },
+                required: ["command"],
+            },
+        },
+    },
 ];
+
+// Commands that must NEVER be reachable through free-form AI tool-calling,
+// even though their own execute() already checks isOwner() as a second
+// layer of defense. Kept separate on purpose: destructive/bulk-messaging
+// actions shouldn't be one cleverly-worded chat message away from firing,
+// and .restart deliberately kills the Node process.
+const AI_TOOL_BLOCKED_COMMANDS = new Set(["broadcast", "restart", "ban", "unban", "block", "unblock", "kick"]);
 
 // Runs the real command behind an AI tool call and returns a short status
 // string that gets fed back to the AI so it can give a natural closing reply.
@@ -912,6 +952,27 @@ async function runAiTool(sock, { from, msg, config }, toolName, toolArgs) {
                 if (cmd) await cmd.execute(sock, { from, args: (toolArgs.question || "").split(" "), msg });
                 return "Homework solve kar ke bhej diya.";
             }
+            case "run_bot_command": {
+                const cmdName = (toolArgs.command || "").toLowerCase().trim().replace(/^\./, "");
+                if (!cmdName) return "Koi command name nahi diya gaya.";
+                if (AI_TOOL_BLOCKED_COMMANDS.has(cmdName)) {
+                    return `"${cmdName}" command sensitive hai — ye sirf owner khud, direct ".${cmdName}" type kar ke chala sakta hai, AI se trigger nahi hoga.`;
+                }
+                const cmd = allCommands.find((c) => c.name === cmdName || (c.aliases || []).includes(cmdName));
+                if (!cmd) return `"${cmdName}" naam ka koi command nahi mila.`;
+                const argsText = toolArgs.args || "";
+                const argsArr = argsText ? argsText.split(/\s+/) : [];
+                await cmd.execute(sock, {
+                    from,
+                    isGroup: (from || "").endsWith("@g.us"),
+                    args: argsArr,
+                    text: `.${cmdName}${argsText ? " " + argsText : ""}`,
+                    msg,
+                    config,
+                    allCommands,
+                });
+                return `"${cmdName}" command chala diya.`;
+            }
             default:
                 return "Yeh tool mojood nahi.";
         }
@@ -930,7 +991,7 @@ const KNOWN_TOOL_NAMES = [
     "get_weather", "get_news", "pinterest_images", "web_search",
     "get_prayer_times", "get_qibla_direction", "get_hijri_date", "get_quran_ayat",
     "get_hadith", "get_dua", "tasbeeh_counter", "get_asmaulhusna", "get_sehri_iftar",
-    "set_azaan_reminder", "search_pdf_book", "solve_homework",
+    "set_azaan_reminder", "search_pdf_book", "solve_homework", "run_bot_command",
 ];
 
 // Some models occasionally print a fake/malformed function-call as plain
@@ -1837,7 +1898,9 @@ const allCommands = [
 
             try {
                 const { name, history } = memory.getContext(from);
-                let systemPrompt = await buildSystemPrompt(config.AI_PERSONA, question);
+                // chatWithTools gives the AI a real web_search tool it can call
+                // itself when needed, so skip the blunt proactive regex-search.
+                let systemPrompt = await buildSystemPrompt(config.AI_PERSONA, question, false);
                 if (name) systemPrompt += `\n\nThe user's name in this chat is "${name}" — you were told this earlier, use it naturally when it fits.`;
 
                 const answer = await chatWithTools(sock, { from, msg, config, systemPrompt, history, question });
