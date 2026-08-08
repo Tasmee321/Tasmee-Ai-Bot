@@ -201,6 +201,33 @@ function isWeatherRequest(text) {
     return WEATHER_TOPIC_REGEX.test(text) && WEATHER_QUESTION_REGEX.test(text);
 }
 
+// ============================================
+// Guard for the pending song/TTS/image "what exactly do you want?" follow-up
+// flows below. Without this, ANY next message from the user — even an
+// unrelated "ok thanks", a greeting, or a totally different request — was
+// being blindly swallowed as if it were the song name / TTS text / image
+// description, because consumePending() doesn't know what the reply text
+// actually says. This checks for the obvious signs that the user has
+// moved on to something else, so we can cancel the pending flow instead
+// of misinterpreting their new message.
+// ============================================
+const CASUAL_FILLER_REGEX =
+    /^(hi+|hello+|hey+|salam|assalam[o]?\s*alaikum|walaikum\s*(as)?salam|ok(ay)?|thik\s*hai|theek\s*hai|thanks|thank\s*you|shukriya|haan|han|nahi|nai|no+|yes|kya|kese\s*ho|kaisay\s*ho|kaise\s*ho|kya\s*haal\s*hai|acha|accha)[.!?\s]*$/i;
+
+function looksLikeUnrelatedReply(text, prefix) {
+    const trimmed = (text || "").trim();
+    if (!trimmed) return true;
+    return (
+        trimmed.startsWith(prefix) || // they typed an actual command
+        isWeatherRequest(trimmed) ||
+        isImageRequest(trimmed) ||
+        isTtsRequest(trimmed) ||
+        isDownloadRequest(trimmed) || // a fresh "gana chahiye" isn't itself a song NAME
+        URGENT_CONTACT_REGEX.test(trimmed) ||
+        CASUAL_FILLER_REGEX.test(trimmed)
+    );
+}
+
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 const question = (text) => new Promise((resolve) => rl.question(text, resolve));
 
@@ -409,9 +436,18 @@ async function getAiReply(text, from, sock, msg) {
     const hasGroqKey = groq.getKeys().length > 0;
     if (!geminiKey && !hasGroqKey) return null;
 
+    // When the Groq tool-calling path will be used below, the AI already
+    // has a real `web_search` tool it can call itself when it decides a
+    // question genuinely needs live info — so we skip the blunt keyword-regex
+    // auto-search here to stop it firing on ordinary chat messages that
+    // happen to contain words like "abhi", "kal", "update", etc. Only the
+    // no-tool-calling paths (Gemini, or Groq without a live sock/msg) still
+    // need this proactive injection since they have no other way to search.
+    const willUseToolCalling = hasGroqKey && !!sock && !!msg;
+
     const { name, history } = memory.getContext(from);
     const commandsModule = require("./commands");
-    let systemPrompt = await commandsModule.buildSystemPrompt(config.AI_PERSONA || "", text);
+    let systemPrompt = await commandsModule.buildSystemPrompt(config.AI_PERSONA || "", text, !willUseToolCalling);
     if (name) systemPrompt += `\n\nThe user's name in this chat is "${name}" — you were told this earlier, use it naturally when it fits.`;
 
     // If this message is a reply to an earlier message (quoted/swipe-reply),
@@ -872,39 +908,58 @@ async function startBot() {
             }
 
             // Follow-up to "kaisi image chahiye?" — actually generates and
-            // sends the real AI image once they describe it.
+            // sends the real AI image once they describe it (unless they've
+            // clearly moved on to something else, e.g. a greeting or a
+            // totally different request — then cancel the pending flow).
             const pendingImg = commandList.pendingImage?.get(from);
             if (pendingImg && !isGroup && !msg.key.fromMe && text.trim()) {
                 commandList.pendingImage.delete(from);
-                await commandList.fetchOrGenerateImage(sock, from, msg, text.trim());
-                return;
+                if (!looksLikeUnrelatedReply(text, PREFIX)) {
+                    await commandList.fetchOrGenerateImage(sock, from, msg, text.trim());
+                    return;
+                }
+                // else: fall through to normal handling below for this message
             }
 
             // Follow-up to "which song/video?" — actually starts the real
-            // download flow (reuses the same .yt logic, incl. audio/video ask).
-            if (!isGroup && !msg.key.fromMe && text.trim() && consumePending(pendingSongRequest, from)) {
-                const explicitVideo = /\bvideo\b/i.test(text);
-                const explicitAudio = /\baudio\b/i.test(text);
-                await commandList.startYtFlow(sock, {
-                    from,
-                    msg,
-                    query: text,
-                    wantsVideo: explicitVideo ? true : explicitAudio ? false : null,
-                    config,
-                });
-                return;
+            // download flow (reuses the same .yt logic, incl. audio/video ask),
+            // but only if the reply actually looks like a song/link and not
+            // an unrelated message — otherwise we cancel the pending flow
+            // instead of mistakenly searching YouTube for random chat.
+            if (!isGroup && !msg.key.fromMe && text.trim() && pendingSongRequest.has(from)) {
+                const isUnrelated = looksLikeUnrelatedReply(text, PREFIX);
+                const consumed = consumePending(pendingSongRequest, from); // always clears the entry
+                if (consumed && !isUnrelated) {
+                    const explicitVideo = /\bvideo\b/i.test(text);
+                    const explicitAudio = /\baudio\b/i.test(text);
+                    await commandList.startYtFlow(sock, {
+                        from,
+                        msg,
+                        query: text,
+                        wantsVideo: explicitVideo ? true : explicitAudio ? false : null,
+                        config,
+                    });
+                    return;
+                }
+                // else: unrelated reply — pending cleared, fall through to normal handling
             }
 
             // Follow-up to "what text should I turn into a voice note?" —
-            // actually generates and sends a real voice note.
-            if (!isGroup && !msg.key.fromMe && text.trim() && consumePending(pendingTTSRequest, from)) {
-                try {
-                    const oggBuffer = await commandList.synthesizeSpeech(text);
-                    await sock.sendMessage(from, { audio: oggBuffer, mimetype: "audio/ogg; codecs=opus", ptt: true }, { quoted: msg });
-                } catch (err) {
-                    await sock.sendMessage(from, { text: `❌ Voice note nahi ban saka: ${err.message}` }, { quoted: msg });
+            // actually generates and sends a real voice note, unless the
+            // reply looks unrelated (then cancel instead of TTS-ing it).
+            if (!isGroup && !msg.key.fromMe && text.trim() && pendingTTSRequest.has(from)) {
+                const isUnrelated = looksLikeUnrelatedReply(text, PREFIX);
+                const consumed = consumePending(pendingTTSRequest, from); // always clears the entry
+                if (consumed && !isUnrelated) {
+                    try {
+                        const oggBuffer = await commandList.synthesizeSpeech(text);
+                        await sock.sendMessage(from, { audio: oggBuffer, mimetype: "audio/ogg; codecs=opus", ptt: true }, { quoted: msg });
+                    } catch (err) {
+                        await sock.sendMessage(from, { text: `❌ Voice note nahi ban saka: ${err.message}` }, { quoted: msg });
+                    }
+                    return;
                 }
-                return;
+                // else: unrelated reply — pending cleared, fall through to normal handling
             }
 
             // Urgent-contact shortcut: if the user is privately asking to
