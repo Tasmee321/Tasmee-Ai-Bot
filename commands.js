@@ -183,11 +183,6 @@ const REALTIME_INFO_REGEX =
 async function buildSystemPrompt(basePersona, question) {
     let systemPrompt = `Aaj ki tareekh aur waqt: ${getPakistanDateTimeString()}.\n\n${basePersona || "You are a helpful assistant."}`;
 
-    // --- NEW ADDITION FOR SERVICES INTRODUCTION ---
-    systemPrompt += `\n\nIMPORTANT RULE: If the user asks about what you can do, your services, your features, or who you are (e.g., "what can you do", "tum kya kar sakte ho", "apni services batao", "what are your features"), you MUST reply with a comprehensive but friendly introduction. Do NOT just tell them to type .menu. Your reply should be structured similarly to this:
-"Hello! I am **Tasmee AI Assistant**, your smart companion. I can speak and understand multiple languages! 🌍\n\nHere are some of the cool things I can do for you:\n\n📥 **Media Downloads:** I can download songs, videos, and reels from YouTube, TikTok, Instagram, Facebook, and Twitter.\n🎨 **AI & Media:** I can generate AI images, read text from pictures, convert your text into voice notes, and make stylish name graphics.\n🕌 **Islamic Features:** I provide Namaz timings, Qibla direction, daily Hadith, Quranic ayats, and have a built-in Tasbeeh counter.\n📚 **Education:** I can read and summarize PDF files, solve your homework step-by-step, and even search for free PDF books.\n🌦️ **Live Info:** Ask me for live weather, latest news headlines, cricket scores, or today's gold and petrol prices.\n\nYou can talk to me naturally, and I'll do my best to assist you! If you want to see a manual list of all my specific commands, just type *.menu* at any time."`;
-    // ---------------------------------------------
-
     if (REALTIME_INFO_REGEX.test(question || "")) {
         const results = await webSearch(question, 3);
         if (results.length > 0) {
