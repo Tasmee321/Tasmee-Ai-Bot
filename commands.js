@@ -354,7 +354,7 @@ const YT_BOT_CHECK_REGEX = /sign in to confirm|not a bot|cookies/i;
 // ----------------------------------------------------
 // THE ULTIMATE YT-DLP FIX: Completely Bypass Web Client
 // ----------------------------------------------------
-function buildYtdlpArgs({ format, outTemplate, wantsVideo, target, useCookies, playerClient }) {
+function buildYtdlpArgs({ format, outTemplate, wantsVideo, target, useCookies, playerClient, skipWebClients = true }) {
     const args = [
         "-f", format,
         "-o", outTemplate,
@@ -367,11 +367,16 @@ function buildYtdlpArgs({ format, outTemplate, wantsVideo, target, useCookies, p
         args.push("--cookies", path.join(__dirname, "cookies.txt"));
     }
 
-    // Yahan hum STRICTLY web aur mweb ko skip kar rahe hain.
-    // Official Music Videos par "n-challenge" sirf web client par aata hai.
-    // Android/TV/iOS client direct link return karte hain.
+    // Yahan hum STRICTLY web aur mweb ko skip kar rahe hain (jab skipWebClients
+    // true ho). Official Music Videos par "n-challenge" sirf web client par
+    // aata hai. Android/TV/iOS client direct link return karte hain — lekin
+    // kabhi kabhi wo bhi 403/blocked ho jate hain, is liye downloadYt() mein
+    // aakhri fallback attempt jaan-boojh kar skipWebClients:false + cookies
+    // ke sath web/mweb bhi try karta hai.
     args.push("--extractor-args", `youtube:player_client=${playerClient || "android,tv"}`);
-    args.push("--extractor-args", `youtube:player_skip=web,mweb`);
+    if (skipWebClients) {
+        args.push("--extractor-args", `youtube:player_skip=web,mweb`);
+    }
 
     if (!wantsVideo) {
         args.push("--extract-audio", "--audio-format", "mp3", "--audio-quality", "0");
@@ -405,12 +410,16 @@ async function downloadYt(sock, { from, msg, target, label, wantsVideo, config }
 
     await sock.sendMessage(from, { text: `⏳ Downloading *${label}* as ${wantsVideo ? "video" : "audio"}, please wait...` });
 
-    // Hum 3 alag alag non-web clients try karenge.
-    // Is se 100% guarantee hai ke music videos bina kisi n-challenge error ke download honge.
+    // Pehle 3 fast non-web clients try karte hain (bina cookies), phir agar
+    // sab fail ho jayein (jaise 403 Forbidden — kabhi kabhi YouTube in
+    // clients ko bhi block kar deta hai) to aakhri fallback ke taur par
+    // cookies + web/mweb/android combo try karte hain — ye zyada resilient
+    // hai lekin thora slow, is liye sirf last resort hai.
     const attempts = [
         { useCookies: false, playerClient: "android" },
         { useCookies: false, playerClient: "tv" },
         { useCookies: false, playerClient: "ios" },
+        { useCookies: true, playerClient: "web,mweb,android", skipWebClients: false },
     ];
 
     let lastErr = null;
