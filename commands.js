@@ -585,11 +585,14 @@ const AI_TOOLS = [
         type: "function",
         function: {
             name: "download_media",
-            description: "Download a song or video from YouTube/TikTok and send it to the user.",
+            description: "Download a song or video from YouTube/TikTok and send it to the user. Only call this when the user has given a REAL, specific song/video name, artist, or link. If they haven't (e.g. they just said \"I need a song\" with no name), do NOT call this tool — ask them what song/video they want instead, in plain text.",
             parameters: {
                 type: "object",
                 properties: {
-                    query: { type: "string", description: "Song/video name, or a direct YouTube/TikTok link" },
+                    query: {
+                        type: "string",
+                        description: "The actual song/video name, artist, or URL the user gave — e.g. 'Shape of You Ed Sheeran'. NEVER put a placeholder like 'song name' or 'link' here — if you don't have a real value, don't call this tool at all.",
+                    },
                     format: { type: "string", enum: ["audio", "video"], description: "Whether the user wants audio or video" },
                 },
                 required: ["query"],
@@ -852,6 +855,23 @@ const AI_TOOLS = [
 // and .restart deliberately kills the Node process.
 const AI_TOOL_BLOCKED_COMMANDS = new Set(["broadcast", "restart", "ban", "unban", "block", "unblock", "kick"]);
 
+// Guards for the download_media tool. The model sometimes calls this tool
+// even when it doesn't actually have a real song/video name yet, and fills
+// the required "query" field with a generic placeholder instead (observed:
+// it literally echoed the parameter's own description text, "song name or
+// link", back as the value) — this catches that so we ask instead of
+// searching YouTube for the placeholder text itself.
+const DOWNLOAD_PLACEHOLDER_QUERY_REGEX =
+    /^(song(\s*name)?(\s*or\s*link)?|video(\s*name)?(\s*or\s*link)?|name(\s*or\s*link)?|link|url|artist(\s*name)?)$/i;
+
+// If the bot just asked "which song?" and the user's reply is actually a
+// decline ("no need", "forget it", "cancel"...) rather than an answer, we
+// must not treat that phrase as if it were the song name and search for it
+// literally — even though e.g. "No Need" also happens to be a real song
+// title, a bare decline reply to our own question is what it looks like.
+const DOWNLOAD_DECLINE_REGEX =
+    /^(no\s*need|nevermind|never\s*mind|forget\s*it|cancel|skip|nahi\s*chahiye|nai\s*chahiye|nahi\s*chaiye|chodo|choro|rehne\s*do|kuch\s*nahi|bas)[.!?\s]*$/i;
+
 // Runs the real command behind an AI tool call and returns a short status
 // string that gets fed back to the AI so it can give a natural closing reply.
 async function runAiTool(sock, { from, msg, config }, toolName, toolArgs) {
@@ -859,8 +879,16 @@ async function runAiTool(sock, { from, msg, config }, toolName, toolArgs) {
     try {
         switch (toolName) {
             case "download_media": {
+                const rawQuery = (toolArgs.query || "").trim();
+                if (!rawQuery || DOWNLOAD_PLACEHOLDER_QUERY_REGEX.test(rawQuery)) {
+                    await sock.sendMessage(from, { text: "🎵 Konsa gana ya video chahiye? Naam ya link bhej dein." }, { quoted: msg });
+                    return "Song/video ka naam abhi tak nahi mila — user se poocha, kuch search nahi kiya.";
+                }
+                if (DOWNLOAD_DECLINE_REGEX.test(rawQuery)) {
+                    return "User ne mana kar diya (decline) — download cancel, kuch search nahi kiya.";
+                }
                 const wantsVideo = toolArgs.format === "video" ? true : toolArgs.format === "audio" ? false : null;
-                await startYtFlow(sock, { from, msg, query: toolArgs.query || "", wantsVideo, config });
+                await startYtFlow(sock, { from, msg, query: rawQuery, wantsVideo, config });
                 return "Download shuru kar diya (ya audio/video poocha gaya).";
             }
             case "find_or_generate_image": {
