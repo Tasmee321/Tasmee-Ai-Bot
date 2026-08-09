@@ -853,7 +853,11 @@ const AI_TOOLS = [
 // layer of defense. Kept separate on purpose: destructive/bulk-messaging
 // actions shouldn't be one cleverly-worded chat message away from firing,
 // and .restart deliberately kills the Node process.
-const AI_TOOL_BLOCKED_COMMANDS = new Set(["broadcast", "restart", "ban", "unban", "block", "unblock", "kick"]);
+// help/menu is deliberately blocked too: the AI has its own instructions
+// (see AI_PERSONA) for answering "what can you do?" with a short, curated
+// summary — it must never additionally fire the real .menu command (which
+// sends the full image+text command list) on top of that summary.
+const AI_TOOL_BLOCKED_COMMANDS = new Set(["broadcast", "restart", "ban", "unban", "block", "unblock", "kick", "help", "menu"]);
 
 // Guards for the download_media tool. The model sometimes calls this tool
 // even when it doesn't actually have a real song/video name yet, and fills
