@@ -667,11 +667,37 @@ async function startBot() {
 
     // ============================================
     // Handle Incoming Messages -> Route to Commands
+    //
+    // Per-chat queue: without this, if a second message from the SAME chat
+    // arrives while the first one is still mid-flight (e.g. waiting on a
+    // slow Groq call, a YouTube search, a retry after a 429), both handlers
+    // run concurrently and their replies can interleave/arrive out of
+    // order — e.g. a reply meant for an earlier voice note landing after a
+    // completely unrelated later text message. Chaining each chat's work
+    // through a promise queue keyed by `from` guarantees messages from the
+    // same chat are always handled one at a time, in the order they
+    // arrived, while different chats still run fully in parallel.
     // ============================================
-    sock.ev.on("messages.upsert", async ({ messages }) => {
+    const chatMessageQueues = new Map();
+
+    sock.ev.on("messages.upsert", ({ messages }) => {
         const msg = messages[0];
         if (!msg.message) return;
 
+        const from = msg.key.remoteJid;
+        const previous = chatMessageQueues.get(from) || Promise.resolve();
+        const current = previous
+            .then(() => handleIncomingMessage(msg))
+            .catch((err) => console.log("❌ Message handler error:", err.message))
+            .finally(() => {
+                // Avoid an ever-growing Map: only clear the slot if nothing
+                // newer queued up behind us while we were running.
+                if (chatMessageQueues.get(from) === current) chatMessageQueues.delete(from);
+            });
+        chatMessageQueues.set(from, current);
+    });
+
+    async function handleIncomingMessage(msg) {
         const from = msg.key.remoteJid;
 
         // 🔍 DEBUG LOG — remove this once everything is confirmed working
@@ -1147,7 +1173,7 @@ async function startBot() {
                 text: `❌ Command mein error aaya: ${err.message}\n\n🛠️ Agar yeh problem barqarar rahe to developer ko batayein: wa.me/923423899407`,
             });
         }
-    });
+    }
 
     // ============================================
     // Welcome / Goodbye messages
