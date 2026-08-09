@@ -225,6 +225,14 @@ function isWeatherRequest(text) {
 const CASUAL_FILLER_REGEX =
     /^(hi+|hello+|hey+|salam|assalam[o]?\s*alaikum|walaikum\s*(as)?salam|ok(ay)?|thik\s*hai|theek\s*hai|thanks|thank\s*you|shukriya|haan|han|nahi|nai|no+|yes|kya|kese\s*ho|kaisay\s*ho|kaise\s*ho|kya\s*haal\s*hai|acha|accha)[.!?\s]*$/i;
 
+// A reply that DECLINES our own follow-up question ("no need", "forget
+// it", "cancel"...) — must not be swallowed as if it were the actual song
+// name / TTS text / image description, even when it also happens to allow
+// trailing filler words like "song"/"gana" (e.g. "no need song" is someone
+// declining, not naming a song called "no need song").
+const DECLINE_REPLY_REGEX =
+    /^(no\s*need|nevermind|never\s*mind|forget\s*it|cancel|skip|nahi\s*chahiye|nai\s*chahiye|nahi\s*chaiye|chodo|choro|rehne\s*do|kuch\s*nahi|bas)\b/i;
+
 function looksLikeUnrelatedReply(text, prefix) {
     const trimmed = (text || "").trim();
     if (!trimmed) return true;
@@ -235,7 +243,8 @@ function looksLikeUnrelatedReply(text, prefix) {
         isTtsRequest(trimmed) ||
         isDownloadRequest(trimmed) || // a fresh "gana chahiye" isn't itself a song NAME
         URGENT_CONTACT_REGEX.test(trimmed) ||
-        CASUAL_FILLER_REGEX.test(trimmed)
+        CASUAL_FILLER_REGEX.test(trimmed) ||
+        DECLINE_REPLY_REGEX.test(trimmed)
     );
 }
 
