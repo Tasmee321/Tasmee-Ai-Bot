@@ -59,19 +59,37 @@ async function extractPdfText(buffer) {
     return data.text || "";
 }
 
+// Guesses which Google Translate TTS voice to use from the text itself, so
+// a Roman/Urdu-script reply is actually SPOKEN in Urdu, not read out with
+// an English voice (which was the previous hardcoded behavior — the #1
+// reason voice replies sounded wrong for anything non-English).
+// Google's translate_tts endpoint has no dedicated Punjabi voice, so
+// Gurmukhi-script Punjabi falls back to Hindi (closest phonetic match) and
+// Shahmukhi/Roman Punjabi falls back to Urdu — both far closer than English.
+function detectTtsLanguage(text) {
+    if (/[\u0600-\u06FF]/.test(text)) return "ur"; // Arabic/Urdu/Shahmukhi script
+    if (/[\u0A00-\u0A7F]/.test(text)) return "hi"; // Gurmukhi script (Punjabi) — no Punjabi TTS voice available, Hindi is closest
+    if (/[\u0900-\u097F]/.test(text)) return "hi"; // Devanagari (Hindi)
+    const romanUrduPunjabiMarkers =
+        /\b(hai|hy|hoon|hun|ho|kya|chahiye|chaiye|kar|karo|kardo|bhejo|dedo|mujhe|muje|nahi|nai|acha|accha|theek|thik|zaroor|wala|wali|mein|main|ka|ki|ke|se|aap|tum|kaisay|kaisa|kese|kesa|sat\s*sri\s*akal|ki\s*haal|tuhada|tuhanu|assi|ohna|kithe|verre)\b/i;
+    if (romanUrduPunjabiMarkers.test(text)) return "ur";
+    return "en";
+}
+
 // Shared TTS engine — turns text into an .ogg/opus voice-note buffer.
 // Used by the .tts command AND by the automatic "reply to voice notes
 // with voice" feature in index.js, so both stay in sync.
-async function synthesizeSpeech(text) {
+async function synthesizeSpeech(text, langOverride) {
     const { spawn } = require("child_process");
     const os = require("os");
     const jobId = `tts_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
     const tmpDir = os.tmpdir();
     const chunkPaths = [];
+    const lang = langOverride || detectTtsLanguage(text);
 
     const chunks = text.match(/.{1,180}(?:\s|$)/g)?.map((s) => s.trim()).filter(Boolean) || [text];
     for (let i = 0; i < chunks.length; i++) {
-        const url = `https://translate.google.com/translate_tts?ie=UTF-8&tl=en&client=tw-ob&q=${encodeURIComponent(chunks[i])}`;
+        const url = `https://translate.google.com/translate_tts?ie=UTF-8&tl=${lang}&client=tw-ob&q=${encodeURIComponent(chunks[i])}`;
         const response = await fetch(url, {
             headers: {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
@@ -1063,6 +1081,23 @@ function parseMalformedToolCall(text) {
     return null;
 }
 
+// Some models (especially the automatic fallback model used when the
+// primary one is rate-limited) occasionally don't use real function-calling
+// and instead leak their tool-call attempt as literal XML-ish text, e.g.
+// `<web_search>query="X" language="en</web_search>` — which must never be
+// shown to the user as-is. In every observed case the ENTIRE message was
+// just that garbled attempt with no real human-facing text alongside it,
+// so rather than risk leaving mangled fragments behind by trying to
+// surgically strip just the tags, treat the whole message as unusable and
+// return null (the caller treats that as "no answer" — safer to send
+// nothing than to send broken tags/attributes).
+const LEAKED_TOOL_TAG_REGEX = /<\/?[a-z_]+[\s>]/i;
+function sanitizeAiText(text) {
+    if (!text) return text;
+    if (LEAKED_TOOL_TAG_REGEX.test(text)) return null;
+    return text;
+}
+
 async function chatWithTools(sock, { from, msg, config, systemPrompt, history, question }) {
     const baseMessages = [
         { role: "system", content: systemPrompt },
@@ -1081,7 +1116,7 @@ async function chatWithTools(sock, { from, msg, config, systemPrompt, history, q
             const resultText = await runAiTool(sock, { from, msg, config }, recovered.name, recovered.args);
             return resultText || "✅ Ho gaya!";
         }
-        return choiceMsg?.content || null;
+        return sanitizeAiText(choiceMsg?.content) || null;
     }
 
     const toolResultMessages = [];
@@ -1096,7 +1131,7 @@ async function chatWithTools(sock, { from, msg, config, systemPrompt, history, q
         model: "llama-3.3-70b-versatile",
         messages: [...baseMessages, choiceMsg, ...toolResultMessages],
     });
-    return followData.choices?.[0]?.message?.content || "✅ Ho gaya!";
+    return sanitizeAiText(followData.choices?.[0]?.message?.content) || "✅ Ho gaya!";
 }
 
 // Fetches an Internet Archive item's file list and finds the actual PDF
@@ -1633,12 +1668,32 @@ const allCommands = [
                 return;
             }
             await sock.sendMessage(from, { text: "⏳ Downloading..." });
+
+            // Primary: tikwm's free API (fast, no watermark). It occasionally
+            // returns an empty/non-JSON body (rate-limited or briefly down),
+            // which used to crash with a raw "Unexpected end of JSON input" —
+            // now caught cleanly and falls back to yt-dlp instead.
             try {
                 const res = await fetch(`https://tikwm.com/api/?url=${encodeURIComponent(url)}`);
-                const data = await res.json();
+                if (!res.ok) throw new Error(`tikwm status ${res.status}`);
+                const raw = await res.text();
+                let data;
+                try {
+                    data = JSON.parse(raw);
+                } catch {
+                    throw new Error("tikwm returned an invalid/empty response");
+                }
                 const videoUrl = data?.data?.play;
-                if (!videoUrl) throw new Error("Could not fetch video.");
+                if (!videoUrl) throw new Error(data?.msg || "Could not fetch video.");
                 await sock.sendMessage(from, { video: { url: videoUrl }, caption: "🎵 TikTok" }, { quoted: msg });
+                return;
+            } catch (err) {
+                console.log("TikTok tikwm failed, falling back to yt-dlp:", err.message);
+            }
+
+            // Fallback: yt-dlp also supports TikTok directly.
+            try {
+                await genericVideoDownload(sock, { from, msg, url, label: "TikTok video", emoji: "🎵" });
             } catch (err) {
                 await sock.sendMessage(from, { text: `❌ Failed: ${err.message}` });
             }
@@ -2647,12 +2702,23 @@ const allCommands = [
             }
             try {
                 await sock.sendMessage(from, { text: `🔎 "${query}" dhoond raha hoon...` }, { quoted: msg });
-                const url = `https://archive.org/advancedsearch.php?q=${encodeURIComponent(query)}+AND+mediatype:texts&fl[]=identifier&fl[]=title&rows=5&output=json`;
+                // Fetch more candidates than we need (15) and ask archive.org
+                // for each item's available derivative formats (fl[]=format),
+                // then only keep/show the ones that actually have a PDF —
+                // otherwise users were picking a result that turned out to be
+                // Djvu/EPUB-only and getting "no PDF found in this item".
+                const url = `https://archive.org/advancedsearch.php?q=${encodeURIComponent(query)}+AND+mediatype:texts&fl[]=identifier&fl[]=title&fl[]=format&rows=15&output=json`;
                 const res = await fetch(url);
                 const data = await res.json();
-                const docs = data?.response?.docs || [];
+                const allDocs = data?.response?.docs || [];
+                const docs = allDocs
+                    .filter((d) => {
+                        const formats = Array.isArray(d.format) ? d.format : d.format ? [d.format] : [];
+                        return formats.some((f) => /pdf/i.test(f));
+                    })
+                    .slice(0, 5);
                 if (!docs.length) {
-                    await sock.sendMessage(from, { text: `❌ "${query}" ke liye koi PDF/book nahi mila.` }, { quoted: msg });
+                    await sock.sendMessage(from, { text: `❌ "${query}" ke liye koi PDF available nahi mili.` }, { quoted: msg });
                     return;
                 }
                 let list = `📚 *"${query}"* ke top results:\n\n`;
@@ -3284,3 +3350,4 @@ module.exports.chatWithTools = chatWithTools;
 module.exports.AI_TOOLS = AI_TOOLS;
 module.exports.runAiTool = runAiTool;
 module.exports.MENU_CATEGORIES = MENU_CATEGORIES;
+module.exports.sanitizeAiText = sanitizeAiText;
