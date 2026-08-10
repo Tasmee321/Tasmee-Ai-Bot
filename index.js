@@ -189,9 +189,13 @@ function isDownloadRequest(text) {
 // whatever's left as the search query directly — instead of asking
 // "which song?" again when the user already told us.
 const DOWNLOAD_FILLER_WORDS_REGEX =
-    /\b(song|gana|gaana|track|music|video|chahiye|chaiye|chahye|chahiy|do|bhejo|send|download|dedo|kardo|please|plz|mujhe|muje|ek|ka|ki|ke|se|mein|mai)\b/gi;
+    /\b(song|gana|gaana|track|music|video|chahiye|chaiye|chahye|chahiy|do|bhejo|send|download|dedo|kardo|krdo|krado|karo|kro|karain|karain|kar|koi|please|plz|mujhe|muje|ek|ka|ki|ke|se|mein|mai)\b/gi;
 function extractDownloadQuery(text) {
-    return text.replace(DOWNLOAD_FILLER_WORDS_REGEX, " ").replace(/\s+/g, " ").trim();
+    return text
+        .replace(DOWNLOAD_FILLER_WORDS_REGEX, " ")
+        .replace(/[.]{2,}/g, " ") // trailing "..." ellipsis some people type
+        .replace(/\s+/g, " ")
+        .trim();
 }
 
 const TTS_TOPIC_REGEX = /\bvoice\s*note\b|\bawaaz\s*mein\b|\bbol\s*kar\s*sunao\b|\bpadh\s*kar\s*sunao\b/i;
@@ -545,6 +549,11 @@ async function getAiReply(text, from, sock, msg) {
         return null;
     }
 
+    // Guard against leaked tool-call syntax slipping through on any path
+    // (chatWithTools already sanitizes its own output; this covers the
+    // plain Groq/Gemini no-tool-calling paths above too).
+    answer = commandsModule.sanitizeAiText(answer);
+
     if (answer) memory.remember(from, text, answer);
     return answer || null;
 }
@@ -774,6 +783,17 @@ async function startBot() {
                 console.log("Anti-viewonce error:", err.message);
             }
         }
+
+        // WhatsApp Status broadcasts are NOT a chat with the bot — people are
+        // just posting a status update, not messaging it. The anti-delete /
+        // view-once handling above is intentionally allowed to run on Status
+        // content, but nothing past this point should treat someone's status
+        // post as if they were talking to the bot: no voice-note replies, no
+        // natural-language intent detection, no AI auto-chat, no commands.
+        // Without this, the bot was replying to random people's personal
+        // status updates (e.g. "dua for my father" -> bot sent an AI reply)
+        // and even running tool-triggered searches off status captions.
+        if (from === "status@broadcast") return;
 
         // Note: we no longer return early on fromMe, so commands sent from your own
         // WhatsApp (self-chat / testing) still get processed.
